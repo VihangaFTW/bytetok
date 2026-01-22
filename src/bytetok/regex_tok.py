@@ -1,4 +1,4 @@
-from tok import Tokenizer
+from base_tok import Tokenizer
 from bpe import Token
 
 
