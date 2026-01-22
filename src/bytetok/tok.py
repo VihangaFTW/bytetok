@@ -1,3 +1,7 @@
+"""
+Base tokenizer interface for byte-level tokenization implementations.
+"""
+
 from abc import ABC, abstractmethod
 from bpe import BytePair, Token
 from sanitise import render_bytes
@@ -11,10 +15,13 @@ VOCAB_SUFFIX: Final[str] = ".vocab"
 
 class Tokenizer(ABC):
     """
-    Base class for Tokenizers.
+    Abstract base class for byte-level tokenizers.
+    
+    Manages vocabulary, byte pair merges, and provides serialization methods.
     """
 
     def __init__(self) -> None:
+        """Initialize tokenizer with base 256 vocabulary."""
         super().__init__()
         # byte pair -> merge token
         self.merges: dict[BytePair, Token] = {}
@@ -23,17 +30,31 @@ class Tokenizer(ABC):
         self.vocab_size = 256
 
     @abstractmethod
-    def train(self, text: list[int], vocab_size: int, verbose=False): ...
+    def train(self, text: list[int], vocab_size: int, verbose=False):
+        """Train tokenizer on byte sequence to learn merges up to target vocab size."""
+        ...
 
     @abstractmethod
-    def encode(self, text): ...
+    def encode(self, text):
+        """Encode text into a sequence of tokens."""
+        ...
 
     @abstractmethod
-    def decode(self, tokens: list[Token]): ...
+    def decode(self, tokens: list[Token]):
+        """Decode a sequence of tokens back into text."""
+        ...
 
     def save(self, file_prefix: str, reg_pat: str = "") -> None:
-        """ """
-
+        """
+        Save tokenizer state to disk.
+        
+        Creates two files: a .model file with merge mappings and a .vocab file 
+        with human-readable token representations.
+        
+        Args:
+            file_prefix: Path prefix for output files.
+            reg_pat: Optional regex pattern for text splitting.
+        """
         # write merges to machine-readable file: used to load()
         model_path = Path(file_prefix).with_suffix(MODEL_SUFFIX)
         # create directory if does not exist
@@ -77,6 +98,17 @@ class Tokenizer(ABC):
                     f.write(f"[{tok}] {subword}\n")
 
     def load(self, model_filename: str) -> None:
+        """
+        Load tokenizer state from a .model file.
+        
+        Restores merge mappings and rebuilds vocabulary.
+        
+        Args:
+            model_filename: Path to the .model file.
+            
+        Raises:
+            ValueError: If file extension is not .model or version mismatch occurs.
+        """
         path = Path(model_filename)
 
         if path.suffix != MODEL_SUFFIX:
@@ -111,9 +143,9 @@ class Tokenizer(ABC):
 
     def _build_vocab(self) -> dict[Token, bytes]:
         """
-        Helper method that builds the token -> text mapping.
-        The implementation follows the order in which the merges were
-        inserted into the merges dictionary.
+        Build token-to-bytes vocabulary mapping.
+        
+        Creates base 256 byte tokens and expands with merged tokens in order.
         """
         # mapping for base 256 tokens
         vocab = {btok: bytes(btok) for btok in range(256)}
