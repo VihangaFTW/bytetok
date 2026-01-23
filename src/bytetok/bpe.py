@@ -2,19 +2,15 @@
 Core Byte Pair Encoding (BPE) operations.
 """
 
+from collections import Counter
+
 type BytePair = tuple[int, int]
 type Token = int
 
 
-def bpe_freqs(tokens: list[Token]) -> dict[BytePair, Token]:
+def bpe_freqs(tokens: list[Token]) -> Counter[BytePair]:
     """Compute the frequency of all consecutive token pairs."""
-    pairs: dict[BytePair, Token] = {}
-
-    for i in range(len(tokens) - 1):
-        tok0, tok1 = tokens[i], tokens[i + 1]
-        pairs[(tok0, tok1)] = pairs.get((tok0, tok1), 0) + 1
-
-    return pairs
+    return Counter((tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1))
 
 
 def bpe_merge(tokens: list[Token], target: BytePair, new_tok: Token) -> list[Token]:
@@ -29,7 +25,11 @@ def bpe_merge(tokens: list[Token], target: BytePair, new_tok: Token) -> list[Tok
     i = 0
     while i < len(tokens):
         # check if we can form a pair and it matches the target
-        if i < len(tokens) - 1 and tokens[i] == target[0] and tokens[i + 1] == target[1]:
+        if (
+            i < len(tokens) - 1
+            and tokens[i] == target[0]
+            and tokens[i + 1] == target[1]
+        ):
             newtoks.append(new_tok)
             i += 2
         else:
