@@ -25,6 +25,8 @@ class Tokenizer(ABC):
         super().__init__()
         # byte pair -> merge token
         self.merges: dict[BytePair, Token] = {}
+        # regex pattern for splitting train data
+        self.pattern: str = ""
         # tokens -> bytes
         self.vocab = self._build_vocab()
         self.vocab_size = 256
@@ -35,7 +37,7 @@ class Tokenizer(ABC):
         ...
 
     @abstractmethod
-    def encode(self, text):
+    def encode(self, text: str) -> list[Token]:
         """Encode text into a sequence of tokens."""
         ...
 
@@ -86,7 +88,7 @@ class Tokenizer(ABC):
                     # extract child tokens and convert to bytes
                     ctok0, ctok1 = inverted_merges[tok]
                     raw_subword0, raw_subword1 = self.vocab[ctok0], self.vocab[ctok1]
-                    # raw bytes -> uft-8 while handling utf fragments and
+                    # raw bytes -> utf-8 while handling utf fragments and
                     # escaping control characters
                     subword0, subword1 = (
                         render_bytes(raw_subword0),

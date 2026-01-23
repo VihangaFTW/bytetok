@@ -6,15 +6,7 @@ import unicodedata
 
 
 def _escape_ctrl_chars(s: str) -> str:
-    """
-    Replace all Unicode control characters in the input string with their Unicode escape sequences.
-
-    Args:
-        s (str): Input string.
-
-    Returns:
-        str: The input string with control characters replaced by their Unicode escapes.
-    """
+    """Replace all Unicode control characters with their escape sequences."""
     cleaned = []
     for c in s:
         # control category codes vary: Cc, Cf, Cn etc.
@@ -28,14 +20,9 @@ def _escape_ctrl_chars(s: str) -> str:
 
 def render_bytes(b: bytes) -> str:
     """
-    Decodes a bytes object using UTF-8 and escapes Unicode control characters.
-    Bytes belonging to an invalid utf-8 byte sequence will be replaced by Unicode Replacement Character.
-
-    Args:
-        b (bytes): The bytes object to decode.
-
-    Returns:
-        str: The decoded string with control characters replaced by their Unicode escape sequences.
+    Decode bytes as UTF-8 and escape control characters.
+    
+    Invalid UTF-8 sequences are replaced with the Unicode replacement character.
     """
     return _escape_ctrl_chars(b.decode("utf-8", errors="replace"))
 
