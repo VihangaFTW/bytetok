@@ -3,8 +3,8 @@ Base tokenizer interface for byte-level tokenization implementations.
 """
 
 from abc import ABC, abstractmethod
-from bpe import BytePair, Token
-from sanitise import render_bytes
+from _bpe import BytePair, Token
+from _sanitise import render_bytes
 from pathlib import Path
 from typing import Final
 
@@ -16,7 +16,7 @@ VOCAB_SUFFIX: Final[str] = ".vocab"
 class Tokenizer(ABC):
     """
     Abstract base class for byte-level tokenizers.
-    
+
     Manages vocabulary, byte pair merges, and provides serialization methods.
     """
 
@@ -24,12 +24,11 @@ class Tokenizer(ABC):
         """Initialize tokenizer with base 256 vocabulary."""
         super().__init__()
         # byte pair -> merge token
-        self.merges: dict[BytePair, Token] = {}
+        self.enc_merges: dict[BytePair, Token] = {}
+        # tokens -> bytes
+        self.dec_vocab = self._build_vocab()
         # regex pattern for splitting train data
         self.pattern: str = ""
-        # tokens -> bytes
-        self.vocab = self._build_vocab()
-        self.vocab_size = 256
 
     @abstractmethod
     def train(self, text: list[int], vocab_size: int, verbose=False):
@@ -42,17 +41,17 @@ class Tokenizer(ABC):
         ...
 
     @abstractmethod
-    def decode(self, tokens: list[Token]):
+    def decode(self, tokens: list[Token]) -> str:
         """Decode a sequence of tokens back into text."""
         ...
 
     def save(self, file_prefix: str, reg_pat: str = "") -> None:
         """
         Save tokenizer state to disk.
-        
-        Creates two files: a .model file with merge mappings and a .vocab file 
+
+        Creates two files: a .model file with merge mappings and a .vocab file
         with human-readable token representations.
-        
+
         Args:
             file_prefix: Path prefix for output files.
             reg_pat: Optional regex pattern for text splitting.
@@ -71,23 +70,26 @@ class Tokenizer(ABC):
             else:
                 f.write("re \n")
             # body: mapping for all merged tokens
-            for pair, mtok in self.merges.items():
+            for pair, mtok in self.enc_merges.items():
                 f.write(f"{pair[0]} {pair[1]} {mtok}\n")
 
         # write token -> text vocabulary for human readability
         vocab_path = Path(file_prefix).with_suffix(VOCAB_SUFFIX)
         vocab_path.parent.mkdir(parents=True, exist_ok=True)
 
-        inverted_merges = {mtok: pair for pair, mtok in self.merges.items()}
+        inverted_merges = {mtok: pair for pair, mtok in self.enc_merges.items()}
 
         with vocab_path.open("w", encoding="utf-8", newline="\n") as f:
-            for tok, b in self.vocab.items():
+            for tok, b in self.dec_vocab.items():
                 subword = render_bytes(b)
                 # token arises from merging: show derivation from child tokens
                 if tok in inverted_merges:
                     # extract child tokens and convert to bytes
                     ctok0, ctok1 = inverted_merges[tok]
-                    raw_subword0, raw_subword1 = self.vocab[ctok0], self.vocab[ctok1]
+                    raw_subword0, raw_subword1 = (
+                        self.dec_vocab[ctok0],
+                        self.dec_vocab[ctok1],
+                    )
                     # raw bytes -> utf-8 while handling utf fragments and
                     # escaping control characters
                     subword0, subword1 = (
@@ -102,12 +104,12 @@ class Tokenizer(ABC):
     def load(self, model_filename: str) -> None:
         """
         Load tokenizer state from a .model file.
-        
+
         Restores merge mappings and rebuilds vocabulary.
-        
+
         Args:
             model_filename: Path to the .model file.
-            
+
         Raises:
             ValueError: If file extension is not .model or version mismatch occurs.
         """
@@ -138,20 +140,19 @@ class Tokenizer(ABC):
                 merges[(ctok0, ctok1)] = mtok
 
         # atomically update tokenizer state after successful read
-        self.merges = merges
-        self.vocab = self._build_vocab()
-        self.vocab_size = 256 + len(merges)
+        self.enc_merges = merges
+        self.dec_vocab = self._build_vocab()
 
     def _build_vocab(self) -> dict[Token, bytes]:
         """
         Build token-to-bytes vocabulary mapping.
-        
+
         Creates base 256 byte tokens and expands with merged tokens in order.
         """
         # mapping for base 256 tokens
-        vocab = {btok: bytes(btok) for btok in range(256)}
+        vocab = {btok: bytes([btok]) for btok in range(256)}
         # mapping for new merged tokens
-        for (tok0, tok1), mtok in self.merges.items():
+        for (tok0, tok1), mtok in self.enc_merges.items():
             vocab[mtok] = vocab[tok0] + vocab[tok1]
 
         return vocab
