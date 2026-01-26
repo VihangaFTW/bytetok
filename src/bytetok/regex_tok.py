@@ -1,128 +1,20 @@
 """Regex-based byte-level tokenizer implementation."""
 
-from enum import Enum
+from typing import override
+
+from exceptions import ModelLoadError, PatternError, VocabularyError
+from strategy import SpecialTokenStrategy
+
 from .base_tok import Tokenizer
-from ._bpe import Token
+from ._bpe import Token, bpe_merge, update_bpe_freqs
 import regex as re
 from pathlib import Path
+from collections import Counter
+import logging
+from pattern import TokenPattern
 
 
-class TokenPattern(str, Enum):
-    """
-    Pre-defined regex patterns for different tokenizer implementations.
-
-    Sources:
-    - GPT patterns: https://github.com/openai/tiktoken/blob/main/tiktoken_ext/openai_public.py
-    - Other patterns: https://github.com/ggerganov/llama.cpp (llama-vocab.cpp)
-    """
-
-    # OpenAI models
-    GPT2 = (
-        r"'(?:[sdmt]|ll|ve|re)|"
-        r" ?\p{L}+|"
-        r" ?\p{N}+|"
-        r" ?[^\s\p{L}\p{N}]+|"
-        r"\s+(?!\S)|"
-        r"\s+"
-    )
-
-    GPT4 = (
-        r"'(?i:[sdmt]|ll|ve|re)|"
-        r"[^\r\n\p{L}\p{N}]?+\p{L}+|"
-        r"\p{N}{1,3}|"
-        r" ?[^\s\p{L}\p{N}]++[\r\n]*|"
-        r"\s*[\r\n]|"
-        r"\s+(?!\S)|"
-        r"\s+"
-    )
-
-    GPT4O = (
-        r"[^\r\n\p{L}\p{N}]?((?=[\p{L}])([^a-z]))*((?=[\p{L}])([^A-Z]))+(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|"
-        r"[^\r\n\p{L}\p{N}]?((?=[\p{L}])([^a-z]))+((?=[\p{L}])([^A-Z]))*(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|"
-        r"\p{N}{1,3}|"
-        r" ?[^\s\p{L}\p{N}]+[\r\n/]*|"
-        r"\s*[\r\n]+|"
-        r"\s+(?!\S)|"
-        r"\s+"
-    )
-
-    # Meta models
-    LLAMA3 = (
-        r"(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|"
-        r"[^\r\n\p{L}\p{N}]?\p{L}+|"
-        r"\p{N}{1,3}|"
-        r" ?[^\s\p{L}\p{N}]+[\r\n]*|"
-        r"\s*[\r\n]+|"
-        r"\s+(?!\S)|"
-        r"\s+"
-    )
-
-    # Alibaba models
-    QWEN2 = (
-        r"(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|"
-        r"[^\r\n\p{L}\p{N}]?\p{L}+|"
-        r"\p{N}|"  # Single digits (different from LLAMA3)
-        r" ?[^\s\p{L}\p{N}]+[\r\n]*|"
-        r"\s*[\r\n]+|"
-        r"\s+(?!\S)|"
-        r"\s+"
-    )
-
-    # DeepSeek models
-    DEEPSEEK_CODER = (
-        r"[\r\n]|"
-        r"\s?\p{L}+|"
-        r"\s?\p{P}+|"
-        r"[一-龥ࠀ-一가-퟿]+|"  # CJK characters
-        r"\p{N}"
-    )
-
-    DEEPSEEK_LLM = (
-        r"[\r\n]|"
-        r"\s?[A-Za-zµÀ-ÖØ-öø-ƺƼ-ƿǄ-ʓʕ-ʯͰ-ͳͶͷͻ-ͽͿΆΈ-ΊΌΎ-ΡΣ-ϵϷ-ҁҊ-ԯԱ-ՖႠ-ჅᎠ-Ᏽᏸ-ᏽᲐ-ᲺᲽ-Ჿᴀ-ᴫᵫ-ᵷᵹ-ᶚḀ-ἕἘ-Ἕἠ-ὅὈ-Ὅὐ-ὗὙὛὝὟ-ώᾀ-ᾴᾶ-ᾼιῂ-ῄῆ-ῌῐ-ΐῖ-Ίῠ-Ῥῲ-ῴῶ-ῼℂℇℊ-ℓℕℙ-ℝℤΩℨK-ℭℯ-ℴℹℼ-ℿⅅ-ⅉⅎↃↄⰀ-ⱻⱾ-ⳤⳫ-ⳮⳳⲀ-ⳤⳫ-ⳮⳲⳳꙀ-ꙭꚀ-ꚛꜢ-ꝯꝱ-ꞇꞋ-ꞎꭰ-ꮿﬀ-ﬆﬓ-ﬗＡ-Ｚａ-ｚ𐐀-𐑏𐒰-𐓓𐓘-𐓻𐲀-𐲲𐳀-𐳲𑢠-𑣟𞤀-𞥃]+|"
-        r"\s?[!-/:-~！-／：-～'-‟　-。]+|"
-        r"\s+$|"
-        r"[一-龥ࠀ-一가-퟿]+|"
-        r"\p{N}+"
-    )
-
-    # coding-focused models
-    STARCODER = (
-        r"\p{N}|"
-        r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|"
-        r"\s+(?!\S)"
-    )
-
-    FALCON = (
-        r"[\p{P}\$\+<=>^\~\|`]+|"
-        r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|"
-        r"\s+(?!\S)|"
-        r"[0-9][0-9][0-9]"
-    )
-
-    # multilingual models
-    BLOOM = r" ?[^(\s|.,!?…。，、।۔،)]+"
-
-    CHATGLM4 = (
-        r"(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|"
-        r"[^\r\n\p{L}\p{N}]?\p{L}+|"
-        r"\p{N}{1,3}|"
-        r" ?[^\s\p{L}\p{N}]+[\r\n]*|"
-        r"\s*[\r\n]+|"
-        r"\s+(?!\S)|"
-        r"\s+"
-    )
-
-    @classmethod
-    def get(cls, name: str) -> str:
-        """Get patterns by name (case-insensitive)."""
-        try:
-            return cls[name.upper()].value
-        except KeyError:
-            raise ValueError(
-                f"Unknown pattern: {name!r}. "
-                f"Valid patterns: {', '.join(pat.name for pat in cls)}"
-            )
+log = logging.getLogger(__name__)
 
 
 class RegexTokenizer(Tokenizer):
@@ -130,19 +22,120 @@ class RegexTokenizer(Tokenizer):
 
     def __init__(self, pattern: str = TokenPattern.GPT4.value) -> None:
         super().__init__()
-        self.pattern = pattern
+        self.pat = pattern
+        self.compiled_pat: re.Pattern[str] = _compile_pattern(self.pat)
+        self.special_toks: dict[str, Token] = {}
 
-    def train(self, text, vocab_size, verbose=False):
+    @override
+    def train(
+        self, text: str | list[str], vocab_size: int, verbose: bool = False
+    ) -> None:
         """Train tokenizer by learning byte pair merges on regex-split chunks."""
-        pass
+        if vocab_size <= 256:
+            raise VocabularyError(
+                "vocab size must be greater than 256", vocab_size=vocab_size
+            )
 
-    def encode(self, text):
-        """Encode text into a sequence of tokens using regex splitting."""
-        pass
+        # handle list input and convert text to bytes
+        if isinstance(text, list):
+            text = "".join(text)
 
+        # split text into chunks defined by pattern
+        chunks = re.findall(self.compiled_pat, text)
+        # convert each chunk to byte sequence
+        tokens: list[list[int]] = [
+            list(chunk.encode("utf-8", errors="replace")) for chunk in chunks
+        ]
+
+        n_merges = vocab_size - 256
+        merges = {}
+        vocab = {tok: bytes([tok]) for tok in range(256)}
+        # byte-pair frequency counter
+        for i in range(n_merges):
+            new_token = 256 + i
+            bp_freqs = Counter()
+            # collect global frequency for each byte-pair
+            for chunk_toks in tokens:
+                update_bpe_freqs(chunk_toks, bp_freqs)
+            # find most common token pair
+            rank0 = bp_freqs.most_common(1)[0][0]
+            # merge pair within each chunk with new token
+            tokens = [bpe_merge(chunk_toks, rank0, new_token) for chunk_toks in tokens]
+            # save merge info and update vocabulary with new token's mapping
+            merges[rank0] = new_token
+            vocab[new_token] = vocab[rank0[0]] + vocab[rank0[1]]
+            # debugging: log new merge info
+            if verbose:
+                log.info(f"merge {i + 1}/{n_merges}: {rank0} -> {new_token}")
+
+        self.enc_merges = merges
+        self.dec_vocab = vocab
+
+    @override
+    def encode(
+        self, text: str, strategy: SpecialTokenStrategy | None = None
+    ) -> list[Token]:
+        """
+        Encode text into a sequence of tokens.
+
+        Args:
+            text: Text to encode.
+            strategy: Strategy to handle special tokens in `text`.
+        """
+
+        # no strategy is inferred as no special token handling
+        if strategy is None:
+            return self._apply_bpe_text(text)
+
+        # retrieve special tokens as defined by chosen strategy
+        special_toks = strategy.handle(text, self.special_toks)
+
+        # escape regex metachars like "+" in special tokens to avoid unwanted effects
+        esc_special_toks = [re.escape(seq) for seq in special_toks]
+        # The capturing group parentheses make re.split() include
+        # the matched delimiters in result
+        # text is split on special tokens while keeping them as separate chunks
+        # otherwise we lose the special tokens after split (leads to lossy decoding)
+        special_pat = "(" + "|".join(esc_special_toks) + ")"
+        chunks = re.split(special_pat, text)
+        tokens = []
+        for chunk in chunks:
+            if chunk in special_toks:
+                # special token sequence already have a unique token id
+                tokens.append(special_toks[chunk])
+            else:
+                tokens.extend(
+                    self._apply_bpe_chunk(list(chunk.encode("utf-8", errors="replace")))
+                )
+
+        return tokens
+
+    @override
     def decode(self, tokens: list[Token]):
         """Decode a sequence of tokens back into text."""
-        pass
+        txt_bytes = []
+        for tok in tokens:
+            if tok in self.dec_vocab:
+                txt_bytes.append(self.dec_vocab[tok])
+            elif tok in self.inverted_special_tokens:
+                txt_bytes.append(
+                    self.inverted_special_tokens[tok].encode("utf-8", errors="replace")
+                )
+            else:
+                raise VocabularyError("token not found in vocabulary", invalid_tok=tok)
+
+        text = b"".join(txt_bytes).decode("utf-8", errors="replace")
+        return text
+
+    def register_special_tokens(self, special_toks: dict[str, Token]) -> None:
+        """
+        This method should be called in __init__ for subclasses that implement
+        special token handling.
+        """
+        self.special_toks = special_toks
+        self.inverted_special_tokens = {
+            token: seq for seq, token in self.special_toks.items()
+        }
 
     @classmethod
     def from_pattern(cls, pattern: str | TokenPattern) -> "RegexTokenizer":
@@ -165,22 +158,20 @@ class RegexTokenizer(Tokenizer):
         """
 
         if isinstance(pattern, TokenPattern):
-            pat = pattern
+            pat = pattern.value
         elif isinstance(pattern, str):
             try:
                 # check for valid pattern
                 pat = TokenPattern.get(pattern)
             except ValueError:
-                # not a valid pattern name
-                # verify custom regex compiles
-                if _is_valid_regex(pattern):
-                    pat = pattern
-                else:
-                    raise ValueError(f"Invalid regex: {pattern}")
+                # not a valid pattern name, treat as custom regex
+                # verify pattern is valid regex
+                _compile_pattern(pattern)
+                pat = pattern
         return cls(pattern=pat)
 
     @classmethod
-    def from_pretrained(cls, model_path: str | Path) -> "RegexTokenizer":
+    def from_pretrained(cls, model_path: str) -> "RegexTokenizer":
         """
         Load a pre-trained tokenizer from a .model file.
 
@@ -190,33 +181,51 @@ class RegexTokenizer(Tokenizer):
         Returns:
             A loaded RegexTokenizer instance.
 
-        Raises:
-            FileNotFoundError: If the model file doesn't exist.
-            ValueError: If the file format is invalid.
 
         Example:
             .. code-block:: python
             tokenizer = RegexTokenizer.from_pretrained("path/to/model.model")
         """
-        path = Path(model_path)
-
-        if not path.exists():
-            raise FileNotFoundError(f"Model file not found: {model_path}")
-
-        if not path.suffix == ".model":
-            raise ValueError(
-                f"Expected .model file, got {path.suffix}. Path: {model_path}"
-            )
 
         tokenizer = cls()
-        tokenizer.load(str(model_path))
+        tokenizer.load(model_path)
 
         return tokenizer
 
+    def _apply_bpe_text(self, text: str) -> list[Token]:
+        # split text into chunks as defined by pattern
+        chunks = re.findall(self.compiled_pat, text)
 
-def _is_valid_regex(pattern: str) -> bool:
-    try:
-        re.compile(pattern)
-        return True
-    except re.error:
+        tokens: list[Token] = []
+        # compress each text chunk into tokens via bpe
+        for chunk in chunks:
+            # aggregate local tokens to global compressed token sequence
+            tokens.extend(
+                self._apply_bpe_chunk(list(chunk.encode("utf-8", errors="replace")))
+            )
+
+        return tokens
+
+    def _special_tokens_exists(self, text: str) -> bool:
+        if self.special_toks:
+            return not all(seq not in text for seq in self.special_toks)
         return False
+
+
+def _compile_pattern(pattern: str) -> re.Pattern:
+    """
+    Compile and validate a regex pattern.
+
+    Args:
+        pattern: Regex pattern string to compile.
+
+    Returns:
+        Compiled regex pattern.
+
+    Raises:
+        ValueError: If pattern is invalid.
+    """
+    try:
+        return re.compile(pattern)
+    except re.error as e:
+        raise PatternError("invalid regex pattern", pattern=pattern, regex_err=e)

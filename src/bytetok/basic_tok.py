@@ -1,7 +1,8 @@
 """Basic byte-level tokenizer implementation."""
 
+from typing import Counter, override
 from datasets import load_dataset
-from ._bpe import Token, bpe_freqs, bpe_merge
+from ._bpe import Token, update_bpe_freqs, bpe_merge
 from .base_tok import Tokenizer
 import logging
 
@@ -14,22 +15,33 @@ class BasicTokenizer(Tokenizer):
     def __init__(self) -> None:
         super().__init__()
 
-    def train(self, text: list[int], vocab_size: int, verbose=False):
+    @override
+    def train(
+        self, text: str | list[str], vocab_size: int, verbose: bool = False
+    ) -> None:
         """Train tokenizer by learning byte pair merges from the input sequence."""
         if vocab_size <= 256:
             raise ValueError("Vocab size must be greater than 256")
+
+        # handle list input and convert text to bytes
+        if isinstance(text, list):
+            text = "".join(text)
+
+        txt_bytes = list(text.encode("utf-8"))
+
         # merges beyond base byte vocabulary
         n_merges = vocab_size - 256
         merges = {}
-        vocab = {i: bytes([i]) for i in range(256)}
+        vocab = {tok: bytes([tok]) for tok in range(256)}
         # BPE algorithm
         for i in range(n_merges):
-            # find most common token pair
-            pairs = bpe_freqs(text)
-            rank0 = pairs.most_common(1)[0][0]
             new_token = 256 + i
+            bp_freqs = Counter()
+            update_bpe_freqs(txt_bytes, bp_freqs)
+            # find most common token pair
+            rank0 = bp_freqs.most_common(1)[0][0]
             # merge pair with new token
-            text = bpe_merge(text, rank0, new_token)
+            txt_bytes = bpe_merge(txt_bytes, rank0, new_token)
             # save merge info and update vocabulary with new token's mapping
             merges[rank0] = new_token
             vocab[new_token] = vocab[rank0[0]] + vocab[rank0[1]]
@@ -37,29 +49,20 @@ class BasicTokenizer(Tokenizer):
             if verbose:
                 log.info(f"Merge {i + 1}/{n_merges}: {rank0} -> {new_token}")
 
-            self.enc_merges = merges  # used for encoding text -> tokens
-            self.dec_vocab = vocab  # usef for decoding tokens -> text
+        self.enc_merges = merges  # used for encoding text -> tokens
+        self.dec_vocab = vocab  # usef for decoding tokens -> text
 
+    @override
     def encode(self, text: str) -> list[Token]:
         """Encode text into a sequence of tokens."""
         # encode Unicode text into bytes
         txt_bytes = text.encode("utf-8", errors="replace")
         # convert each byte to [0-255] token range
         tokens = list(txt_bytes)
-        # loop text compression using BPE algorithm
-        while len(tokens) >= 2:
-            bp_freqs = bpe_freqs(tokens)
-            # retrieve the byte pair with the lowest merge index
-            # because higher index tokens might depend on lower index merged tokens
-            pair = min(bp_freqs, key=lambda bp: self.enc_merges.get(bp, float("inf")))
-            # no merge mapping for current target bp
-            if pair not in self.enc_merges:
-                break
-            # merge target pair
-            tokens = bpe_merge(tokens, pair, self.enc_merges[pair])
+        # return bpe of tokens
+        return self._apply_bpe_chunk(tokens)
 
-        return tokens
-
+    @override
     def decode(self, tokens: list[Token]) -> str:
         """Decode a sequence of tokens back into text."""
         # token stream -> byte stream
@@ -72,12 +75,12 @@ def main() -> None:
     """Load and preprocess sci-fi books dataset for tokenizer training."""
     # preprocessing
     ds = load_dataset("stevez80/Sci-Fi-Books-gutenberg", split="train")
-    tokens = list("".join(ds[:100]["text"]).encode("utf-8"))
+    text = "".join(ds[:100]["text"])
     vocab_size = 280
 
     # train tokenizer on dataset
     btok = BasicTokenizer()
-    btok.train(tokens, vocab_size, verbose=True)
+    btok.train(text, vocab_size, verbose=True)
 
     # save vocabulary
     btok.save("token-map")

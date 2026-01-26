@@ -3,10 +3,12 @@ Base tokenizer interface for byte-level tokenization implementations.
 """
 
 from abc import ABC, abstractmethod
-from _bpe import BytePair, Token
+from _bpe import BytePair, Token, update_bpe_freqs, bpe_merge
 from _sanitise import render_bytes
 from pathlib import Path
 from typing import Final
+from collections import Counter
+from exceptions import ModelLoadError
 
 VERSION: Final[str] = "bytetok v1"
 MODEL_SUFFIX: Final[str] = ".model"
@@ -28,10 +30,13 @@ class Tokenizer(ABC):
         # tokens -> bytes
         self.dec_vocab = self._build_vocab()
         # regex pattern for splitting train data
-        self.pattern: str = ""
+        self.pat: str = ""
+        self.special_toks: dict[str, Token] = {}
 
     @abstractmethod
-    def train(self, text: list[int], vocab_size: int, verbose=False):
+    def train(
+        self, text: str | list[str], vocab_size: int, verbose: bool = False
+    ) -> None:
         """Train tokenizer on byte sequence to learn merges up to target vocab size."""
         ...
 
@@ -52,9 +57,8 @@ class Tokenizer(ABC):
         Creates two files: a .model file with merge mappings and a .vocab file
         with human-readable token representations.
 
-        Args:
-            file_prefix: Path prefix for output files.
-            reg_pat: Optional regex pattern for text splitting.
+        :param file_prefix: Path prefix for output files.
+        :param reg_pat: Optional regex pattern for text splitting.
         """
         # write merges to machine-readable file: used to load()
         model_path = Path(file_prefix).with_suffix(MODEL_SUFFIX)
@@ -107,16 +111,16 @@ class Tokenizer(ABC):
 
         Restores merge mappings and rebuilds vocabulary.
 
-        Args:
-            model_filename: Path to the .model file.
-
-        Raises:
-            ValueError: If file extension is not .model or version mismatch occurs.
+        :param model_filename: Path to the .model file.
+        :raises ModelLoadError: If file does not exist, extension is not .model, or version mismatch occurs.
         """
         path = Path(model_filename)
 
-        if path.suffix != MODEL_SUFFIX:
-            raise ValueError("Model file must have a .model extension")
+        if not path.exists():
+            raise ModelLoadError("model filepath does not exist", model_path=str(path))
+
+        if not path.suffix == MODEL_SUFFIX:
+            raise ModelLoadError("expected .model file", model_path=str(path))
 
         merges = {}
 
@@ -124,14 +128,15 @@ class Tokenizer(ABC):
             # verify version match
             model_ver = f.readline().strip()
             if model_ver != VERSION:
-                raise ValueError(
-                    f"Version mismatch: expected {VERSION}, got {model_ver}"
+                raise ModelLoadError(
+                    "model version mismatch",
+                    version_mismatch=(model_ver, MODEL_SUFFIX),
                 )
 
             # store split pattern if it exists
             regex = f.readline().strip()
             if regex.startswith("re ") and len(regex) > 3:
-                self.pattern = regex[3:]
+                self.pat = regex[3:]
 
             # read and load merges
             for line in f:
@@ -156,3 +161,30 @@ class Tokenizer(ABC):
             vocab[mtok] = vocab[tok0] + vocab[tok1]
 
         return vocab
+
+    def _apply_bpe_chunk(self, tokens: list[Token]) -> list[Token]:
+        """
+        Apply BPE merges to a token sequence.
+
+        :param tokens: List of tokens (initially bytes 0-255).
+        :returns: Compressed token sequence after applying learned merges.
+        """
+        # loop text compression using BPE algorithm
+        while len(tokens) >= 2:
+            bp_freqs = Counter()
+            update_bpe_freqs(tokens, bp_freqs)
+            # retrieve the byte pair with the lowest merge index
+            # because higher index tokens might depend on lower index merged tokens
+            pair: BytePair = min(
+                bp_freqs,
+                key=lambda bp: self.enc_merges[bp]
+                if bp in self.enc_merges
+                else float("inf"),
+            )
+            # no pair to merge
+            if pair not in self.enc_merges:
+                break
+            # merge target pair
+            tokens = bpe_merge(tokens, pair, self.enc_merges[pair])
+
+        return tokens

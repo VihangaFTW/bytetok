@@ -1,7 +1,8 @@
 """Factory functions for creating tokenizers."""
 
-from .regex_tok import RegexTokenizer, TokenPattern
+from .regex_tok import RegexTokenizer
 from .base_tok import Tokenizer
+from pattern import TokenPattern
 
 
 def get_tokenizer(pattern: str = "gpt4") -> RegexTokenizer:

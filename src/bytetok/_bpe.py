@@ -8,9 +8,10 @@ type BytePair = tuple[int, int]
 type Token = int
 
 
-def bpe_freqs(tokens: list[Token]) -> Counter[BytePair]:
+def update_bpe_freqs(tokens: list[Token], counter: Counter) -> None:
     """Compute the frequency of all consecutive token pairs."""
-    return Counter((tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1))
+    all_pairs = [(tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1)]
+    counter.update(all_pairs)
 
 
 def bpe_merge(tokens: list[Token], target: BytePair, new_tok: Token) -> list[Token]:
