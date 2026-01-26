@@ -37,7 +37,7 @@ class AllowNoneRaiseStrategy(SpecialTokenStrategy):
         return {}
 
 
-class AllowNone(SpecialTokenStrategy):
+class AllowNoneStrategy(SpecialTokenStrategy):
     @override
     def handle(self, text: str, special_toks: dict[str, Token]) -> dict[str, Token]:
         if special_toks and not all(seq not in text for seq in special_toks):

@@ -2,16 +2,14 @@
 
 from typing import override
 
-from exceptions import ModelLoadError, PatternError, VocabularyError
+from exceptions import PatternError, VocabularyError
 from strategy import SpecialTokenStrategy
 
 from .base_tok import Tokenizer
 from ._bpe import Token, bpe_merge, update_bpe_freqs
 import regex as re
-from pathlib import Path
 from collections import Counter
 import logging
-from pattern import TokenPattern
 
 
 log = logging.getLogger(__name__)
@@ -20,9 +18,10 @@ log = logging.getLogger(__name__)
 class RegexTokenizer(Tokenizer):
     """Tokenizer that splits text using regex patterns before applying BPE."""
 
-    def __init__(self, pattern: str = TokenPattern.GPT4.value) -> None:
+    def __init__(self, pattern: str | None = None) -> None:
         super().__init__()
-        self.pat = pattern
+        if pattern is not None:
+            self.pat = pattern
         self.compiled_pat: re.Pattern[str] = _compile_pattern(self.pat)
         self.special_toks: dict[str, Token] = {}
 
@@ -127,6 +126,12 @@ class RegexTokenizer(Tokenizer):
         text = b"".join(txt_bytes).decode("utf-8", errors="replace")
         return text
 
+    @classmethod
+    def from_pretrained(cls, model_path: str) -> "RegexTokenizer":
+        tokenizer = cls()
+        tokenizer.load(model_path)
+        return tokenizer
+
     def register_special_tokens(self, special_toks: dict[str, Token]) -> None:
         """
         This method should be called in __init__ for subclasses that implement
@@ -136,61 +141,6 @@ class RegexTokenizer(Tokenizer):
         self.inverted_special_tokens = {
             token: seq for seq, token in self.special_toks.items()
         }
-
-    @classmethod
-    def from_pattern(cls, pattern: str | TokenPattern) -> "RegexTokenizer":
-        """
-        Create tokenizer from a pattern name or custom pattern.
-
-        Args:
-            pattern: Either a TokenPattern enum member, pattern name string ("gpt2", "gpt4"),
-                    or a custom regex pattern string.
-
-        Returns:
-            A new RegexTokenizer instance.
-
-        Example:
-            .. code-block:: python
-            tokenizer = RegexTokenizer.from_pattern("gpt4")
-            tokenizer = RegexTokenizer.from_pattern(TokenPattern.GPT2)
-            tokenizer = RegexTokenizer.from_pattern(r"custom pattern")
-
-        """
-
-        if isinstance(pattern, TokenPattern):
-            pat = pattern.value
-        elif isinstance(pattern, str):
-            try:
-                # check for valid pattern
-                pat = TokenPattern.get(pattern)
-            except ValueError:
-                # not a valid pattern name, treat as custom regex
-                # verify pattern is valid regex
-                _compile_pattern(pattern)
-                pat = pattern
-        return cls(pattern=pat)
-
-    @classmethod
-    def from_pretrained(cls, model_path: str) -> "RegexTokenizer":
-        """
-        Load a pre-trained tokenizer from a .model file.
-
-        Args:
-            model_path: Path to the .model file.
-
-        Returns:
-            A loaded RegexTokenizer instance.
-
-
-        Example:
-            .. code-block:: python
-            tokenizer = RegexTokenizer.from_pretrained("path/to/model.model")
-        """
-
-        tokenizer = cls()
-        tokenizer.load(model_path)
-
-        return tokenizer
 
     def _apply_bpe_text(self, text: str) -> list[Token]:
         # split text into chunks as defined by pattern

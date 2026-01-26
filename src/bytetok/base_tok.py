@@ -130,7 +130,7 @@ class Tokenizer(ABC):
             if model_ver != VERSION:
                 raise ModelLoadError(
                     "model version mismatch",
-                    version_mismatch=(model_ver, MODEL_SUFFIX),
+                    version_mismatch=(model_ver, VERSION),
                 )
 
             # store split pattern if it exists

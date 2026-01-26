@@ -1,5 +1,7 @@
 from enum import Enum
 
+from bytetok.src.bytetok.exceptions import PatternError
+
 
 class TokenPattern(str, Enum):
     """
@@ -113,7 +115,7 @@ class TokenPattern(str, Enum):
         try:
             return cls[name.upper()].value
         except KeyError:
-            raise ValueError(
+            raise PatternError(
                 f"Unknown pattern: {name!r}. "
                 f"Valid patterns: {', '.join(pat.name for pat in cls)}"
             )

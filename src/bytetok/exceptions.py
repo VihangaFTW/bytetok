@@ -87,7 +87,7 @@ class ModelLoadError(ByteTokError):
 
 
 class PatternError(ByteTokError):
-    """Raised when regex pattern compilation or validation fails."""
+    """Raised when compiling and/or validating regex patterns."""
 
     def __init__(
         self,
@@ -112,3 +112,22 @@ class PatternError(ByteTokError):
         super().__init__(message + extra)
         self.pattern = pattern
         self.regex_err = regex_err
+
+
+class StrategyError(ByteTokError):
+    """Raised when strategy operations fail."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        invalid_name: str | None = None,
+        available_strats: list[str] | None = None,
+    ) -> None:
+        """ """
+        extra = " "
+        if invalid_name:
+            extra += f"(available: {available_strats}) (got {invalid_name}) "
+        super().__init__(message + extra)
+        self.invalid_name = invalid_name
+        self.available_strats = available_strats
