@@ -2,15 +2,17 @@
 
 from typing import Counter, override
 from datasets import load_dataset
-from ._bpe import Token, update_bpe_freqs, bpe_merge
-from .base_tok import Tokenizer
+from .._bpe import Token, update_bpe_freqs, bpe_merge
+from .base import Tokenizer
 import logging
 
 log = logging.getLogger(__name__)
 
 
 class BasicTokenizer(Tokenizer):
-    """Tokenizer that operates directly on byte sequences without regex splitting."""
+    """
+    Tokenizer that operates directly on byte sequences without regex splitting
+    """
 
     TOKENIZER_TYPE = "basic"
 
@@ -61,8 +63,8 @@ class BasicTokenizer(Tokenizer):
             if verbose:
                 log.info(f"Merge {i + 1}/{n_merges}: {rank0} -> {new_token}")
 
-        self.enc_merges = merges  # used for encoding text -> tokens
-        self.dec_vocab = vocab  # usef for decoding tokens -> text
+        self.merges = merges  # used for encoding text -> tokens
+        self.vocab = vocab  # usef for decoding tokens -> text
 
     @override
     def encode(self, text: str) -> list[Token]:
@@ -78,7 +80,7 @@ class BasicTokenizer(Tokenizer):
     def decode(self, tokens: list[Token]) -> str:
         """Decode a sequence of tokens back into text."""
         # token stream -> byte stream
-        txt_bytes = b"".join(self.dec_vocab[tok] for tok in tokens)
+        txt_bytes = b"".join(self.vocab[tok] for tok in tokens)
         # byte stream -> python string
         return txt_bytes.decode("utf-8", errors="replace")
 

@@ -32,12 +32,12 @@ class Tokenizer(ABC):
         """Initialize tokenizer with base 256 vocabulary."""
         super().__init__()
         # byte pair -> merge token
-        self.enc_merges: Encoding = {}
+        self.merges: Encoding = {}
         # regex pattern for splitting train data
         self.pat: str = ""
         self.special_toks: dict[str, Token] = {}
         # tokens -> bytes
-        self.dec_vocab: Vocabulary = self._build_vocab()
+        self.vocab: Vocabulary = self._build_vocab()
 
     @abstractmethod
     def train(
@@ -181,11 +181,11 @@ class Tokenizer(ABC):
 
         # atomically update tokenizer state after successful read
         self.special_toks = special_toks
-        self.enc_merges = merges
-        self.dec_vocab = self._build_vocab()
+        self.merges = merges
+        self.vocab = self._build_vocab()
 
         log.info(
-            f"model loaded successfully: {len(self.special_toks)} special tokens, {len(self.enc_merges)} merge rules, {len(self.dec_vocab)} total tokens"
+            f"model loaded successfully: {len(self.special_toks)} special tokens, {len(self.merges)} merge rules, {len(self.vocab)} total tokens"
         )
 
     def _build_vocab(self) -> Vocabulary:
@@ -201,7 +201,7 @@ class Tokenizer(ABC):
         for seq, tok in self.special_toks.items():
             vocab[tok] = seq.encode("utf-8")
         # mapping for new merged tokens
-        for (tok0, tok1), mtok in self.enc_merges.items():
+        for (tok0, tok1), mtok in self.merges.items():
             vocab[mtok] = vocab[tok0] + vocab[tok1]
 
         log.debug(f"built vocabulary with {len(vocab)} tokens")
@@ -216,7 +216,7 @@ class Tokenizer(ABC):
 
         log.debug(f"saving model to {model_path}")
         log.debug(
-            f"saving {len(self.special_toks)} special tokens and {len(self.enc_merges)} merge rules"
+            f"saving {len(self.special_toks)} special tokens and {len(self.merges)} merge rules"
         )
 
         with model_path.open("w", newline="\n") as f:
@@ -237,7 +237,7 @@ class Tokenizer(ABC):
             # end of special tokens marker
             f.write("---\n")
             # body 2: mapping for all merged tokens
-            for pair, mtok in self.enc_merges.items():
+            for pair, mtok in self.merges.items():
                 f.write(f"{pair[0]} {pair[1]} {mtok}\n")
 
     def _save_vocab(self, file_prefix: str) -> None:
@@ -247,22 +247,22 @@ class Tokenizer(ABC):
 
         log.debug(f"saving vocab to {vocab_path}")
 
-        inverted_merges = {mtok: pair for pair, mtok in self.enc_merges.items()}
+        inverted_merges = {mtok: pair for pair, mtok in self.merges.items()}
 
         with vocab_path.open("w", encoding="utf-8", newline="\n") as f:
             # save special token sequence -> token
             for seq, tok in self.special_toks.items():
                 f.write(f"ST [{tok}] {seq}\n")
             # save base tokens + merge toke pairs -> token ids
-            for tok, b in self.dec_vocab.items():
+            for tok, b in self.vocab.items():
                 subword = render_bytes(b)
                 # token arises from merging: show derivation from child tokens
                 if tok in inverted_merges:
                     # extract child tokens and convert to bytes
                     ctok0, ctok1 = inverted_merges[tok]
                     raw_subword0, raw_subword1 = (
-                        self.dec_vocab[ctok0],
-                        self.dec_vocab[ctok1],
+                        self.vocab[ctok0],
+                        self.vocab[ctok1],
                     )
                     # raw bytes -> utf-8 while handling utf fragments and
                     # escaping control characters
@@ -290,14 +290,12 @@ class Tokenizer(ABC):
             # because higher index tokens might depend on lower index merged tokens
             pair: BytePair = min(
                 bp_freqs,
-                key=lambda bp: self.enc_merges[bp]
-                if bp in self.enc_merges
-                else float("inf"),
+                key=lambda bp: self.merges[bp] if bp in self.merges else float("inf"),
             )
             # no pair to merge
-            if pair not in self.enc_merges:
+            if pair not in self.merges:
                 break
             # merge target pair
-            tokens = bpe_merge(tokens, pair, self.enc_merges[pair])
+            tokens = bpe_merge(tokens, pair, self.merges[pair])
 
         return tokens

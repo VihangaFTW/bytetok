@@ -2,11 +2,11 @@
 
 from typing import override
 
-from exceptions import PatternError, VocabularyError
+from exceptions import PatternError, SpecialTokenError, VocabularyError
 from strategy import SpecialTokenStrategy
 
-from .base_tok import Tokenizer
-from ._bpe import Token, bpe_merge, update_bpe_freqs
+from .base import Tokenizer
+from .._bpe import Encoding, Token, Vocabulary, bpe_merge, update_bpe_freqs
 import regex as re
 from collections import Counter
 import logging
@@ -81,8 +81,8 @@ class RegexTokenizer(Tokenizer):
             if verbose:
                 log.info(f"merge {i + 1}/{n_merges}: {rank0} -> {new_token}")
 
-        self.enc_merges = merges
-        self.dec_vocab = vocab
+        self.merges: Encoding = merges
+        self.vocab: Vocabulary = vocab
 
     @override
     def encode(
@@ -128,8 +128,8 @@ class RegexTokenizer(Tokenizer):
         """Decode a sequence of tokens back into text."""
         txt_bytes = []
         for tok in tokens:
-            if tok in self.dec_vocab:
-                txt_bytes.append(self.dec_vocab[tok])
+            if tok in self.vocab:
+                txt_bytes.append(self.vocab[tok])
             elif tok in self.inverted_special_tokens:
                 txt_bytes.append(
                     self.inverted_special_tokens[tok].encode("utf-8", errors="replace")
@@ -140,15 +140,37 @@ class RegexTokenizer(Tokenizer):
         text = b"".join(txt_bytes).decode("utf-8", errors="replace")
         return text
 
-    def register_special_tokens(self, special_toks: dict[str, Token]) -> None:
+    def register_special_tokens(self, special_toks: list[str]) -> None:
         """
-        This method should be called in __init__ for subclasses that implement
-        special token handling.
+        Register special tokens with auto-assigned IDs.
+
+        Special token IDs are assigned sequentially starting from vocab_size.
+        Must be called after training the tokenizer.
+
+        Args:
+            special_toks: List of special token strings to register.
+
+        Raises:
+            SpecialTokenError: If tokenizer hasn't been trained yet.
         """
-        self.special_toks = special_toks
+        if not hasattr(self, "merges"):
+            raise SpecialTokenError(
+                f"{self.__class__.__name__} must be trained before registering special tokens"
+            )
+        # special tokens have auto assigned ids
+        vocab_size = 256 + len(self.merges)
+
+        # special tokens are appended at the end of trained vocab
+        for idx, seq in enumerate(special_toks):
+            self.special_toks[seq] = vocab_size + idx
+
         self.inverted_special_tokens = {
             token: seq for seq, token in self.special_toks.items()
         }
+
+        # rebuild vocab to include special tokens for decoding
+        for seq, tok in self.special_toks.items():
+            self.vocab[tok] = seq.encode("utf-8")
 
     def _apply_bpe_text(self, text: str) -> list[Token]:
         # split text into chunks as defined by pattern
