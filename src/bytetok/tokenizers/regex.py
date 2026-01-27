@@ -6,7 +6,7 @@ from ..exceptions import PatternError, SpecialTokenError, VocabularyError
 from ..strategy import SpecialTokenStrategy
 
 from .base import Tokenizer
-from .._bpe import Encoding, Token, Vocabulary, bpe_merge, update_bpe_freqs
+from .._bpe import Encoding, Token, Vocabulary, bpe_merge_with_freq_update, update_bpe_freqs
 import regex as re
 from collections import Counter
 import logging
@@ -52,13 +52,15 @@ class RegexTokenizer(Tokenizer):
         n_merges = vocab_size - 256
         merges = {}
         vocab = {tok: bytes([tok]) for tok in range(256)}
-        # byte-pair frequency counter
+
+        # compute initial byte-pair frequencies once across all chunks
+        bp_freqs: Counter = Counter()
+        for chunk_toks in tokens:
+            update_bpe_freqs(chunk_toks, bp_freqs)
+
+        # BPE algorithm with incremental frequency updates
         for i in range(n_merges):
             new_token = 256 + i
-            bp_freqs = Counter()
-            # collect global frequency for each byte-pair
-            for chunk_toks in tokens:
-                update_bpe_freqs(chunk_toks, bp_freqs)
             # check if any valid pairs remain
             # 1. text compressed to single token
             # 2. very short input text such that enough pairs cannot form
@@ -72,8 +74,11 @@ class RegexTokenizer(Tokenizer):
                 break
             # find most common token pair
             rank0 = bp_freqs.most_common(1)[0][0]
-            # merge pair within each chunk with new token
-            tokens = [bpe_merge(chunk_toks, rank0, new_token) for chunk_toks in tokens]
+            # merge pair within each chunk and update frequencies incrementally
+            tokens = [
+                bpe_merge_with_freq_update(chunk_toks, rank0, new_token, bp_freqs)
+                for chunk_toks in tokens
+            ]
             # save merge info and update vocabulary with new token's mapping
             merges[rank0] = new_token
             vocab[new_token] = vocab[rank0[0]] + vocab[rank0[1]]

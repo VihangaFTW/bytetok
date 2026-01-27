@@ -13,8 +13,8 @@ type Vocabulary = dict[Token, TokenBytes]
 
 def update_bpe_freqs(tokens: list[Token], counter: Counter) -> None:
     """Compute the frequency of all consecutive token pairs."""
-    all_pairs = [(tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1)]
-    counter.update(all_pairs)
+    # Use zip for generator-based iteration (avoids intermediate list allocation).
+    counter.update(zip(tokens, tokens[1:]))
 
 
 def bpe_merge(tokens: list[Token], target: BytePair, new_tok: Token) -> list[Token]:
@@ -28,7 +28,7 @@ def bpe_merge(tokens: list[Token], target: BytePair, new_tok: Token) -> list[Tok
 
     i = 0
     while i < len(tokens):
-        # check if we can form a pair and it matches the target
+        # check if we can form a pair and it matches the target.
         if (
             i < len(tokens) - 1
             and tokens[i] == target[0]
@@ -39,5 +39,70 @@ def bpe_merge(tokens: list[Token], target: BytePair, new_tok: Token) -> list[Tok
         else:
             newtoks.append(tokens[i])
             i += 1
+
+    return newtoks
+
+
+def bpe_merge_with_freq_update(
+    tokens: list[Token],
+    target: BytePair,
+    new_tok: Token,
+    counter: Counter,
+) -> list[Token]:
+    """
+    Merge target pair into new token and incrementally update frequency counter.
+
+    This combines merge and frequency update in a single pass for efficiency.
+    Decrements counts for pairs destroyed by the merge and increments counts
+    for new pairs created.
+
+    :param tokens: Current token sequence.
+    :param target: The byte pair to merge.
+    :param new_tok: The new token ID for the merged pair.
+    :param counter: Frequency counter to update in-place.
+    :return: New token sequence with merges applied.
+    """
+    if len(tokens) < 2:
+        return tokens
+
+    newtoks: list[Token] = []
+    i = 0
+    n = len(tokens)
+
+    while i < n:
+        # check if current position has the target pair
+        if i < n - 1 and tokens[i] == target[0] and tokens[i + 1] == target[1]:
+            # decrement count for the pair being merged
+            counter[target] -= 1
+
+            # handle left neighbor: decrement old pair, increment new pair
+            if newtoks:
+                left = newtoks[-1]
+                old_left_pair = (left, target[0])
+                counter[old_left_pair] -= 1
+                new_left_pair = (left, new_tok)
+                counter[new_left_pair] += 1
+
+            # handle right neighbor: decrement old pair, increment new pair
+            if i + 2 < n:
+                right = tokens[i + 2]
+                # only decrement if next position isn't also being merged
+                if not (
+                    i + 3 < n and tokens[i + 2] == target[0] and tokens[i + 3] == target[1]
+                ):
+                    old_right_pair = (target[1], right)
+                    counter[old_right_pair] -= 1
+                    new_right_pair = (new_tok, right)
+                    counter[new_right_pair] += 1
+
+            newtoks.append(new_tok)
+            i += 2
+        else:
+            newtoks.append(tokens[i])
+            i += 1
+
+    # clean up zero counts to keep counter lean
+    for pair in [k for k, v in counter.items() if v <= 0]:
+        del counter[pair]
 
     return newtoks

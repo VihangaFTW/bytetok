@@ -286,22 +286,23 @@ class Tokenizer(ABC):
         :param tokens: List of tokens (initially bytes 0-255).
         :returns: Compressed token sequence after applying learned merges.
         """
-        # loop text compression using BPE algorithm
+        # loop text compression using BPE algorithm.
         while len(tokens) >= 2:
-            # get all unique bigram pairs
-            # we dont need to count frequencies to find min token
+            # get all unique bigram pairs.
+            # we dont need to count frequencies to find min token.
             # see: https://github.com/karpathy/minbpe/issues/87#issuecomment-2273349030
             bigrams = set(zip(tokens, tokens[1:]))
-            # retrieve the byte pair with the lowest merge index
-            # because higher index tokens might depend on lower index merged tokens
+            # retrieve the byte pair with the lowest merge index.
+            # because higher index tokens might depend on lower index merged tokens.
+            # use dict.get() to avoid double lookup (membership check + retrieval).
             pair: BytePair = min(
                 bigrams,
-                key=lambda bp: self.merges[bp] if bp in self.merges else float("inf"),
+                key=lambda bp: self.merges.get(bp, float("inf")),
             )
-            # no pair to merge
+            # no pair to merge.
             if pair not in self.merges:
                 break
-            # merge target pair
+            # merge target pair.
             tokens = bpe_merge(tokens, pair, self.merges[pair])
 
         return tokens
