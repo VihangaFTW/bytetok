@@ -1,7 +1,7 @@
 """ByteTok: Byte-level tokenization library."""
 
-from .base_tok import Tokenizer
-from .regex_tok import RegexTokenizer
+from .tokenizers.base import Tokenizer
+from .tokenizers.regex import RegexTokenizer
 from .factory import get_tokenizer, from_pretrained, list_patterns
 from .pattern import TokenPattern
 

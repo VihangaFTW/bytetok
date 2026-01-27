@@ -2,7 +2,7 @@
 
 from typing import Counter, override, TYPE_CHECKING
 from datasets import load_dataset
-from .._bpe import Token, update_bpe_freqs, bpe_merge_with_freq_update
+from .._bpe import Token, bpe_merge_with_freq_update
 from .base import Tokenizer
 import logging
 
@@ -30,28 +30,28 @@ class BasicTokenizer(Tokenizer):
         if vocab_size <= 256:
             raise ValueError("Vocab size must be greater than 256")
 
-        # handle list input and convert text to bytes.
+        # handle list input and convert text to bytes
         if isinstance(text, list):
             text = "".join(text)
 
         txt_bytes = list(text.encode("utf-8"))
 
-        # merges beyond base byte vocabulary.
+        # merges beyond base byte vocabulary
         n_merges = vocab_size - 256
         merges = {}
         vocab = {tok: bytes([tok]) for tok in range(256)}
 
-        # compute initial byte-pair frequencies once.
+        # compute initial byte-pair frequencies once
         bp_freqs: Counter = Counter()
-        update_bpe_freqs(txt_bytes, bp_freqs)
+        bp_freqs.update(zip(txt_bytes, txt_bytes[1:]))
 
-        # BPE algorithm with incremental frequency updates.
+        # BPE algorithm with incremental frequency updates
         for i in range(n_merges):
             new_token = 256 + i
-            # check if any valid pairs remain.
-            # 1. text compressed to single token.
-            # 2. very short input text such that enough pairs cannot form.
-            # before vocab size met.
+            # check if any valid pairs remain
+            # 1. text compressed to single token
+            # 2. very short input text such that enough pairs cannot form
+            # before vocab size met
             if not bp_freqs:
                 log.warning(
                     f"no more byte pairs to merge after {i} merges "
@@ -60,24 +60,26 @@ class BasicTokenizer(Tokenizer):
                 break
             # find most common token pair.
             rank0 = bp_freqs.most_common(1)[0][0]
-            # merge pair with new token and update frequencies incrementally.
-            txt_bytes = bpe_merge_with_freq_update(txt_bytes, rank0, new_token, bp_freqs)
-            # save merge info and update vocabulary with new token's mapping.
+            # merge pair with new token and update frequencies incrementally
+            txt_bytes = bpe_merge_with_freq_update(
+                txt_bytes, rank0, new_token, bp_freqs
+            )
+            # save merge info and update vocabulary with new token's mapping
             merges[rank0] = new_token
             vocab[new_token] = vocab[rank0[0]] + vocab[rank0[1]]
             # debugging: log new merge info.
             if verbose:
                 log.info(f"Merge {i + 1}/{n_merges}: {rank0} -> {new_token}")
 
-        self.merges = merges  # used for encoding text -> tokens.
-        self.vocab = vocab  # used for decoding tokens -> text.
+        self.merges = merges  # used for encoding text -> tokens
+        self.vocab = vocab  # used for decoding tokens -> text
 
     @override
     def encode(
         self, text: str, strategy: "SpecialTokenStrategy | None" = None
     ) -> list[Token]:
         """Encode text into a sequence of tokens."""
-        # BasicTokenizer does not support special token strategies.
+        # BasicTokenizer does not support special token strategies
         _ = strategy
         # encode Unicode text into bytes
         txt_bytes = text.encode("utf-8", errors="replace")

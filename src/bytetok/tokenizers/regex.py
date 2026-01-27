@@ -6,7 +6,12 @@ from ..exceptions import PatternError, SpecialTokenError, VocabularyError
 from ..strategy import SpecialTokenStrategy
 
 from .base import Tokenizer
-from .._bpe import Encoding, Token, Vocabulary, bpe_merge_with_freq_update, update_bpe_freqs
+from .._bpe import (
+    Encoding,
+    Token,
+    Vocabulary,
+    bpe_merge_with_freq_update,
+)
 import regex as re
 from collections import Counter
 import logging
@@ -56,7 +61,7 @@ class RegexTokenizer(Tokenizer):
         # compute initial byte-pair frequencies once across all chunks
         bp_freqs: Counter = Counter()
         for chunk_toks in tokens:
-            update_bpe_freqs(chunk_toks, bp_freqs)
+            bp_freqs.update(zip(chunk_toks, chunk_toks[1:]))
 
         # BPE algorithm with incremental frequency updates
         for i in range(n_merges):

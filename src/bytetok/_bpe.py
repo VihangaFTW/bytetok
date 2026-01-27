@@ -11,12 +11,6 @@ type Encoding = dict[BytePair, Token]
 type Vocabulary = dict[Token, TokenBytes]
 
 
-def update_bpe_freqs(tokens: list[Token], counter: Counter) -> None:
-    """Compute the frequency of all consecutive token pairs."""
-    # Use zip for generator-based iteration (avoids intermediate list allocation).
-    counter.update(zip(tokens, tokens[1:]))
-
-
 def bpe_merge(tokens: list[Token], target: BytePair, new_tok: Token) -> list[Token]:
     """
     Merge all occurrences of a target token pair into a single new token.
@@ -56,6 +50,28 @@ def bpe_merge_with_freq_update(
     Decrements counts for pairs destroyed by the merge and increments counts
     for new pairs created.
 
+    Naiive algorithm: O(n × M).
+    Current implementation: O(n × M)
+
+    But current implementation is a bit faster per merge because it updates frequencies
+    in the same pass, so we avoid an extra full scan to recompute counts each time.
+    But overall training is still O(n × M) since we still do M passes over the sequence.
+
+    where:
+    n = token sequence length
+    M = number of merges
+
+    Each merge requires a full O(n) scan of the token sequence.
+
+    Note that faster algorithm(s) exist and is used in production grade
+    tokenizers like tiktoken.
+    See: https://github.com/karpathy/minbpe/issues/5#issue-2139918301.
+    However, it is not worth the effort to implement this complex algorithm in
+    Python. Maybe in future, I might refactor with a binding to this implemented in Rust.
+
+    The current implementation is adequate for training datasets
+    under 100 MB with 10k-50k vocab size.
+
     :param tokens: Current token sequence.
     :param target: The byte pair to merge.
     :param new_tok: The new token ID for the merged pair.
@@ -88,7 +104,9 @@ def bpe_merge_with_freq_update(
                 right = tokens[i + 2]
                 # only decrement if next position isn't also being merged
                 if not (
-                    i + 3 < n and tokens[i + 2] == target[0] and tokens[i + 3] == target[1]
+                    i + 3 < n
+                    and tokens[i + 2] == target[0]
+                    and tokens[i + 3] == target[1]
                 ):
                     old_right_pair = (target[1], right)
                     counter[old_right_pair] -= 1
