@@ -2,8 +2,8 @@
 
 from typing import override
 
-from exceptions import PatternError, SpecialTokenError, VocabularyError
-from strategy import SpecialTokenStrategy
+from ..exceptions import PatternError, SpecialTokenError, VocabularyError
+from ..strategy import SpecialTokenStrategy
 
 from .base import Tokenizer
 from .._bpe import Encoding, Token, Vocabulary, bpe_merge, update_bpe_freqs
@@ -123,7 +123,7 @@ class RegexTokenizer(Tokenizer):
         return tokens
 
     @override
-    def decode(self, tokens: list[Token]):
+    def decode(self, tokens: list[Token]) -> str:
         """Decode a sequence of tokens back into text."""
         txt_bytes = []
         for tok in tokens:
@@ -181,11 +181,6 @@ class RegexTokenizer(Tokenizer):
             )
 
         return tokens
-
-    def _special_tokens_exists(self, text: str) -> bool:
-        if self.special_toks:
-            return not all(seq not in text for seq in self.special_toks)
-        return False
 
 
 def _compile_pattern(pattern: str) -> re.Pattern:

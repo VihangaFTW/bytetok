@@ -1,6 +1,6 @@
 from enum import Enum
 
-from bytetok.src.bytetok.exceptions import PatternError
+from .exceptions import PatternError
 
 
 class TokenPattern(str, Enum):

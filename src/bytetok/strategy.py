@@ -3,15 +3,16 @@
 from typing import override
 from abc import ABC, abstractmethod
 import logging
-from _bpe import Token
+from ._bpe import Token
 
-from exceptions import SpecialTokenError
+from .exceptions import SpecialTokenError
 
 log = logging.getLogger(__name__)
 
 
 class SpecialTokenStrategy(ABC):
     """Base strategy for handling special tokens during encoding."""
+
     @abstractmethod
     def handle(self, text: str, special_toks: dict[str, Token]) -> dict[str, Token]:
         """Return the special tokens to use for encoding."""
@@ -34,9 +35,10 @@ class AllowNoneRaiseStrategy(SpecialTokenStrategy):
     def handle(self, text: str, special_toks: dict[str, Token]) -> dict[str, Token]:
         if special_toks:
             found = {seq for seq in special_toks if seq in text}
-            raise SpecialTokenError(
-                "special tokens found in text but not allowed", found_tokens=found
-            )
+            if found:
+                raise SpecialTokenError(
+                    "special tokens found in text but not allowed", found_tokens=found
+                )
         return {}
 
 

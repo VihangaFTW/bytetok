@@ -3,13 +3,15 @@ Base tokenizer interface for byte-level tokenization implementations.
 """
 
 from abc import ABC, abstractmethod
-from _bpe import BytePair, Encoding, Token, Vocabulary, update_bpe_freqs, bpe_merge
-from _sanitise import render_bytes
+from .._bpe import BytePair, Encoding, Token, Vocabulary, bpe_merge
+from .._sanitise import render_bytes
 from pathlib import Path
-from typing import Final
-from collections import Counter
-from exceptions import ModelLoadError
+from typing import Final, TYPE_CHECKING
+from ..exceptions import ModelLoadError
 import logging
+
+if TYPE_CHECKING:
+    from ..strategy import SpecialTokenStrategy
 
 PREFIX: Final[str] = "ByteTok"
 VERSION: Final[str] = "0.1.0"
@@ -47,7 +49,9 @@ class Tokenizer(ABC):
         ...
 
     @abstractmethod
-    def encode(self, text: str) -> list[Token]:
+    def encode(
+        self, text: str, strategy: "SpecialTokenStrategy | None" = None
+    ) -> list[Token]:
         """Encode text into a sequence of tokens."""
         ...
 
@@ -284,12 +288,14 @@ class Tokenizer(ABC):
         """
         # loop text compression using BPE algorithm
         while len(tokens) >= 2:
-            bp_freqs = Counter()
-            update_bpe_freqs(tokens, bp_freqs)
+            # get all unique bigram pairs
+            # we dont need to count frequencies to find min token
+            # see: https://github.com/karpathy/minbpe/issues/87#issuecomment-2273349030
+            bigrams = set(zip(tokens, tokens[1:]))
             # retrieve the byte pair with the lowest merge index
             # because higher index tokens might depend on lower index merged tokens
             pair: BytePair = min(
-                bp_freqs,
+                bigrams,
                 key=lambda bp: self.merges[bp] if bp in self.merges else float("inf"),
             )
             # no pair to merge

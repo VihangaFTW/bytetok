@@ -1,5 +1,6 @@
 """
-A fun reproduction of GPT-4's tokenization using its pre-trained merges via tiktoken library.
+A reproduction of GPT-4's tokenization by
+loading the pretrained tokenizer from the `cl100k_base` tokenizer of tiktoken.
 """
 
 from ..tokenizers.regex import RegexTokenizer
@@ -14,6 +15,4 @@ class GPT4Tokenizer(RegexTokenizer):
         """Initialize with GPT-4 pattern and load official merges from tiktoken."""
         super().__init__(get_pattern("gpt4"))
         # get official gpt4 merges
-        _ = tiktoken.get_encoding("cl100k_base")
-        # todo: complete class
-        pass
+        enc = tiktoken.get_encoding("cl100k_base")

@@ -1,10 +1,13 @@
 """Basic byte-level tokenizer implementation."""
 
-from typing import Counter, override
+from typing import Counter, override, TYPE_CHECKING
 from datasets import load_dataset
 from .._bpe import Token, update_bpe_freqs, bpe_merge
 from .base import Tokenizer
 import logging
+
+if TYPE_CHECKING:
+    from ..strategy import SpecialTokenStrategy
 
 log = logging.getLogger(__name__)
 
@@ -67,8 +70,12 @@ class BasicTokenizer(Tokenizer):
         self.vocab = vocab  # usef for decoding tokens -> text
 
     @override
-    def encode(self, text: str) -> list[Token]:
+    def encode(
+        self, text: str, strategy: "SpecialTokenStrategy | None" = None
+    ) -> list[Token]:
         """Encode text into a sequence of tokens."""
+        # BasicTokenizer does not support special token strategies.
+        _ = strategy
         # encode Unicode text into bytes
         txt_bytes = text.encode("utf-8", errors="replace")
         # convert each byte to [0-255] token range
