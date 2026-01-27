@@ -10,8 +10,8 @@ log = logging.getLogger(__name__)
 
 
 class BasicTokenizer(Tokenizer):
-    """Tokenizer that operates directly on byte sequences without regex splitting."""\
-        
+    """Tokenizer that operates directly on byte sequences without regex splitting."""
+
     TOKENIZER_TYPE = "basic"
 
     def __init__(self) -> None:
@@ -40,6 +40,16 @@ class BasicTokenizer(Tokenizer):
             new_token = 256 + i
             bp_freqs = Counter()
             update_bpe_freqs(txt_bytes, bp_freqs)
+            # check if any valid pairs remain
+            # 1. text compressed to single token
+            # 2. very short input text such that enough pairs cannot form
+            # before vocab size met
+            if not bp_freqs:
+                log.warning(
+                    f"no more byte pairs to merge after {i} merges "
+                    f"(requested {n_merges}). stopping early."
+                )
+                break
             # find most common token pair
             rank0 = bp_freqs.most_common(1)[0][0]
             # merge pair with new token

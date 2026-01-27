@@ -6,6 +6,9 @@ from collections import Counter
 
 type BytePair = tuple[int, int]
 type Token = int
+type TokenBytes = bytes
+type Encoding = dict[BytePair, Token]
+type Vocabulary = dict[Token, TokenBytes]
 
 
 def update_bpe_freqs(tokens: list[Token], counter: Counter) -> None:

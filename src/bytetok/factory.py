@@ -1,6 +1,7 @@
 """Factory functions for creating tokenizers."""
 
-from bytetok.src.bytetok.exceptions import StrategyError
+from bytetok.src.bytetok.basic_tok import BasicTokenizer
+from bytetok.src.bytetok.exceptions import ModelLoadError, StrategyError
 from bytetok.src.bytetok.strategy import (
     AllowAllStrategy,
     AllowCustomStrategy,
@@ -9,32 +10,34 @@ from bytetok.src.bytetok.strategy import (
     SpecialTokenStrategy,
 )
 from .regex_tok import RegexTokenizer
-from .base_tok import Tokenizer
+from .base_tok import MODEL_SUFFIX, Tokenizer
 from pattern import TokenPattern
 
 from typing import Final, Literal, overload
+from pathlib import Path
 
 
 # Strategy factory
 # ===================================================================================
 
-StrategyName = Literal["all", "none", "none_raise", "custom"]
+StrategyName = Literal["all", "none", "none-raise", "custom"]
 
-_strategies: Final[dict[str, type[SpecialTokenStrategy]]] = {
+_SPECIAL_TOKEN_STRATEGIES: Final[dict[str, type[SpecialTokenStrategy]]] = {
     "all": AllowAllStrategy,
     "none": AllowNoneStrategy,
-    "none_raise": AllowNoneRaiseStrategy,
+    "none-raise": AllowNoneRaiseStrategy,
     "custom": AllowCustomStrategy,
 }
 
 
 def list_strategies() -> list[str]:
-    return list(_strategies.keys())
+    """Return available special token strategy names."""
+    return list(_SPECIAL_TOKEN_STRATEGIES.keys())
 
 
 @overload
 def get_strategy(
-    name: Literal["all", "none", "none_raise"],
+    name: Literal["all", "none", "none-raise"],
 ) -> SpecialTokenStrategy: ...
 
 
@@ -45,30 +48,30 @@ def get_strategy(
 
 
 def get_strategy(
-    name: StrategyName = "none_raise", allowed_subset: set[str] | None = None
+    name: StrategyName = "none-raise", allowed_subset: set[str] | None = None
 ) -> SpecialTokenStrategy:
     """
-    Get a special token handling strategy.
+    Create a special token handling strategy.
 
-    Args:
-        name: Strategy name ("all", "none", "none_raise", "custom").
-        **kwargs: Strategy-specific arguments (e.g., allowed_subset for custom).
+    :param name: Strategy name: "all" allows all special tokens, "none" skips them,
+                 "none-raise" raises on special tokens, "custom" allows only a subset.
+    :param allowed_subset: Required when name="custom". Set of allowed special tokens.
+    :return: Configured strategy instance.
+    :raises StrategyError: If strategy name is unknown or custom strategy lacks allowed_subset.
 
-    Returns:
-        A SpecialTokenStrategy instance.
+    .. code-block:: python
 
-    Example:
         strategy = get_strategy("all")
-        strategy = get_strategy("none_raise")
+        strategy = get_strategy("none-raise")
         strategy = get_strategy("custom", allowed_subset={"<|endoftext|>"})
     """
 
     # handle invalid strat names
-    if name not in _strategies:
+    if name not in _SPECIAL_TOKEN_STRATEGIES:
         raise StrategyError(
             "unknown strategy name",
             invalid_name=name,
-            available_strats=list(_strategies.keys()),
+            available_strats=list(_SPECIAL_TOKEN_STRATEGIES.keys()),
         )
 
     # custom strat requires subset
@@ -77,7 +80,7 @@ def get_strategy(
             raise StrategyError("allowed_subset is required for custom strategy")
         return AllowCustomStrategy(allowed_subset)
 
-    return _strategies[name]()
+    return _SPECIAL_TOKEN_STRATEGIES[name]()
 
 
 # ===================================================================================
@@ -100,18 +103,19 @@ Pattern = Literal[
     "chatglm4",
 ]
 
+_TOKENIZER_REGISTRY: Final[dict[str, type[Tokenizer]]] = {
+    "regex": RegexTokenizer,
+    "basic": BasicTokenizer,
+}
+
 
 def list_patterns() -> list[str]:
-    """
-    List all available built-in patterns.
-
-    Returns:
-        List of pattern names.
-
-    Example:
-        patterns = list_patterns()  # ["GPT2", "GPT4"]
-    """
+    """Return names of all available built-in tokenization patterns."""
     return [pat.name for pat in TokenPattern]
+
+
+def get_pattern(name: Pattern) -> str:
+    return TokenPattern.get(name)
 
 
 @overload
@@ -125,7 +129,23 @@ def get_tokenizer(*, custom_pattern: str) -> Tokenizer: ...
 def get_tokenizer(
     pattern: Pattern = "gpt4o", *, custom_pattern: str | None = None
 ) -> Tokenizer:
-    """ """
+    """
+    Create a tokenizer with a built-in or custom regex pattern.
+
+    :param pattern: Built-in pattern name (e.g., "gpt2", "gpt4o", "llama3").
+                    Ignored if custom_pattern is provided.
+    :param custom_pattern: Custom regex pattern string. Overrides pattern parameter.
+    :return: Configured tokenizer instance.
+    :raises PatternError: If custom_pattern is invalid regex.
+
+    .. code-block:: python
+
+        # Use built-in pattern
+        tokenizer = get_tokenizer("gpt4o")
+
+        # Use custom pattern
+        tokenizer = get_tokenizer(custom_pattern=r"'s|'t|'re|'ve|'m|'ll|'d")
+    """
     # regex class initializer handles invalid custom patterns
     if custom_pattern is not None:
         return RegexTokenizer(custom_pattern)
@@ -136,21 +156,60 @@ def get_tokenizer(
     return RegexTokenizer(pat_str)
 
 
-# todo method reads the model type
+def _detect_tokenizer_type(model_path: str) -> str:
+    """Read tokenizer type from model file header."""
+    path = Path(model_path)
+
+    if not path.exists():
+        raise ModelLoadError("model filepath does not exist", model_path=str(path))
+
+    if path.suffix != MODEL_SUFFIX:
+        raise ModelLoadError("expected .model file", model_path=str(path))
+
+    with path.open("r", encoding="utf-8") as f:
+        # skip version to get tokenizer type
+        _ = f.readline().strip()
+
+        tok_type = f.readline().strip()
+        if tok_type.startswith("type "):
+            return tok_type[5:]
+
+        raise ModelLoadError(f"expected tokenizer type got {tok_type}")
+
+
 def from_pretrained(model_path: str) -> Tokenizer:
     """
     Load a pre-trained tokenizer from disk.
 
-    Args:
-        model_path: Path to the .model file.
+    Automatically detects tokenizer type from
+    the model file header and loads the appropriate implementation.
 
-    Returns:
-        A loaded tokenizer instance.
+    :param model_path: Path to the .model file.
+    :return: Loaded tokenizer instance with vocabulary and configuration.
+    :raises ModelLoadError: If file doesn't exist, has wrong extension, or contains
+                            unknown tokenizer type.
 
-    Example:
+    .. code-block:: python
+
         tokenizer = from_pretrained("path/to/model.model")
+        tokens = tokenizer.encode("Hello world")
     """
-    return RegexTokenizer.from_pretrained(model_path)
+    # extract model type from file
+    tok_type = _detect_tokenizer_type(model_path)
+
+    # look up class from registry
+    if tok_type not in _TOKENIZER_REGISTRY:
+        raise ModelLoadError(
+            "unknown tokenizer type in model file",
+            type_mismatch=(tok_type, list(_TOKENIZER_REGISTRY.keys())),
+        )
+
+    # instantiate and load
+    tokenizer = _TOKENIZER_REGISTRY[tok_type]()
+
+    tokenizer.load(model_path)
+
+    return tokenizer
 
 
 # ===================================================================================

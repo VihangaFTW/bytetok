@@ -26,6 +26,7 @@ class RegexTokenizer(Tokenizer):
             self.pat = pattern
         self.compiled_pat: re.Pattern[str] = _compile_pattern(self.pat)
         self.special_toks: dict[str, Token] = {}
+        self.inverted_special_tokens: dict[Token, str] = {}
 
     @override
     def train(
@@ -58,6 +59,17 @@ class RegexTokenizer(Tokenizer):
             # collect global frequency for each byte-pair
             for chunk_toks in tokens:
                 update_bpe_freqs(chunk_toks, bp_freqs)
+            # check if any valid pairs remain
+            # 1. text compressed to single token
+            # 2. very short input text such that enough pairs cannot form
+            # 3. all chunks are compressed down to single tokens (or start as single tokens)
+            # before vocab size met
+            if not bp_freqs:
+                log.warning(
+                    f"no more byte pairs to merge after {i} merges "
+                    f"(requested {n_merges}). stopping early."
+                )
+                break
             # find most common token pair
             rank0 = bp_freqs.most_common(1)[0][0]
             # merge pair within each chunk with new token
@@ -127,12 +139,6 @@ class RegexTokenizer(Tokenizer):
 
         text = b"".join(txt_bytes).decode("utf-8", errors="replace")
         return text
-
-    @classmethod
-    def from_pretrained(cls, model_path: str) -> "RegexTokenizer":
-        tokenizer = cls()
-        tokenizer.load(model_path)
-        return tokenizer
 
     def register_special_tokens(self, special_toks: dict[str, Token]) -> None:
         """

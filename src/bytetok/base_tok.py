@@ -3,7 +3,7 @@ Base tokenizer interface for byte-level tokenization implementations.
 """
 
 from abc import ABC, abstractmethod
-from _bpe import BytePair, Token, update_bpe_freqs, bpe_merge
+from _bpe import BytePair, Encoding, Token, Vocabulary, update_bpe_freqs, bpe_merge
 from _sanitise import render_bytes
 from pathlib import Path
 from typing import Final
@@ -32,9 +32,9 @@ class Tokenizer(ABC):
         """Initialize tokenizer with base 256 vocabulary."""
         super().__init__()
         # byte pair -> merge token
-        self.enc_merges: dict[BytePair, Token] = {}
+        self.enc_merges: Encoding = {}
         # tokens -> bytes
-        self.dec_vocab = self._build_vocab()
+        self.dec_vocab: Vocabulary = self._build_vocab()
         # regex pattern for splitting train data
         self.pat: str = ""
         self.special_toks: dict[str, Token] = {}
@@ -67,13 +67,13 @@ class Tokenizer(ABC):
         :param reg_pat: Optional regex pattern for text splitting.
         """
         log.info(f"saving tokenizer to {file_prefix}")
-        
+
         # write merge pair -> merge token mappings for loading model in future
         self._save_model(file_prefix, reg_pat)
 
         # write token -> text vocabulary for human readability
         self._save_vocab(file_prefix)
-        
+
         log.info("tokenizer saved successfully")
 
     def load(self, model_filename: str) -> None:
@@ -95,7 +95,7 @@ class Tokenizer(ABC):
 
         log.info(f"loading model from {path}")
 
-        merges: dict[BytePair, Token] = {}
+        merges: Encoding = {}
         special_toks: dict[str, Token] = {}
 
         with path.open("r", encoding="utf-8") as f:
@@ -104,8 +104,18 @@ class Tokenizer(ABC):
             if model_ver != VERSION:
                 raise ModelLoadError(
                     "model version mismatch",
-                    version_mismatch=(model_ver, VERSION),
+                    version_mismatch=(model_ver, [VERSION]),
                 )
+            # read tokenizer type
+            tok_type = f.readline().strip()
+            if tok_type.startswith("type "):
+                tok_type = tok_type[5:]
+                # validate that loaded type matches current instance type
+                if tok_type != self.TOKENIZER_TYPE:
+                    raise ModelLoadError(
+                        "tokenizer type mismatch",
+                        type_mismatch=(tok_type, [self.TOKENIZER_TYPE]),
+                    )
 
             # store split pattern if it exists
             model_re = f.readline().strip()
@@ -173,10 +183,12 @@ class Tokenizer(ABC):
         self.special_toks = special_toks
         self.enc_merges = merges
         self.dec_vocab = self._build_vocab()
-        
-        log.info(f"model loaded successfully: {len(self.special_toks)} special tokens, {len(self.enc_merges)} merge rules, {len(self.dec_vocab)} total tokens")
 
-    def _build_vocab(self) -> dict[Token, bytes]:
+        log.info(
+            f"model loaded successfully: {len(self.special_toks)} special tokens, {len(self.enc_merges)} merge rules, {len(self.dec_vocab)} total tokens"
+        )
+
+    def _build_vocab(self) -> Vocabulary:
         """
         Build token-to-bytes vocabulary mapping.
 
@@ -203,11 +215,14 @@ class Tokenizer(ABC):
         model_path.parent.mkdir(parents=True, exist_ok=True)
 
         log.debug(f"saving model to {model_path}")
-        log.debug(f"saving {len(self.special_toks)} special tokens and {len(self.enc_merges)} merge rules")
+        log.debug(
+            f"saving {len(self.special_toks)} special tokens and {len(self.enc_merges)} merge rules"
+        )
 
         with model_path.open("w", newline="\n") as f:
-            # header: version and regex pattern if exists
+            # header: version, tokenizer type, regex pattern if exists
             f.write(f"{PREFIX} {VERSION}\n")
+            f.write(f"type {self.TOKENIZER_TYPE}\n")
             if reg_pat:
                 f.write(f"re {reg_pat}\n")
             else:

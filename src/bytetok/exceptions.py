@@ -74,13 +74,16 @@ class ModelLoadError(ByteTokError):
         message: str,
         *,
         model_path: str | None = None,
-        version_mismatch: tuple[str, str] | None = None,
+        version_mismatch: tuple[str, list[str]] | None = None,
+        type_mismatch: tuple[str, list[str]] | None = None,
     ) -> None:
         extra = " "
         if model_path:
             extra += f"(path: {model_path}) "
         if version_mismatch is not None:
             extra += f"(expected: {version_mismatch[1]}) (got {version_mismatch[0]}) "
+        if type_mismatch is not None:
+            extra += f"(expected: {type_mismatch[1]}) (got {type_mismatch[0]}) "
         super().__init__(message + extra)
         self.model_path = model_path
         self.version_mismatch = version_mismatch

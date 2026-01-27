@@ -9,4 +9,5 @@ dependencies = [
     "ipykernel>=7.1.0",
     "ipywidgets>=8.1.8",
     "regex>=2026.1.15",
+    "tiktoken>=0.12.0",
 ]
