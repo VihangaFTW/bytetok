@@ -33,11 +33,11 @@ class Tokenizer(ABC):
         super().__init__()
         # byte pair -> merge token
         self.enc_merges: Encoding = {}
-        # tokens -> bytes
-        self.dec_vocab: Vocabulary = self._build_vocab()
         # regex pattern for splitting train data
         self.pat: str = ""
         self.special_toks: dict[str, Token] = {}
+        # tokens -> bytes
+        self.dec_vocab: Vocabulary = self._build_vocab()
 
     @abstractmethod
     def train(
