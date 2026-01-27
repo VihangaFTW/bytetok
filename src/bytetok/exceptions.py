@@ -62,6 +62,7 @@ class TrainingError(ByteTokError):
     """Raised when tokenizer training fails."""
 
     def __init__(self, message: str, *, vocab_size: int) -> None:
+        """Initialize with target vocabulary size."""
         super().__init__(message)
         self.vocab_size = vocab_size
 
@@ -102,10 +103,9 @@ class PatternError(ByteTokError):
         """
         Initialize PatternError with pattern details.
 
-        Args:
-            message: Error message.
-            pattern: The regex pattern that failed.
-            regex_err: The underlying regex error from the regex library.
+        :param message: Error message.
+        :param pattern: The regex pattern that failed.
+        :param regex_err: The underlying regex error from the regex library.
         """
         extra = " "
         if pattern:
@@ -127,7 +127,7 @@ class StrategyError(ByteTokError):
         invalid_name: str | None = None,
         available_strats: list[str] | None = None,
     ) -> None:
-        """ """
+        """Initialize with optional invalid strategy name and available strategies."""
         extra = " "
         if invalid_name:
             extra += f"(available: {available_strats}) (got {invalid_name}) "

@@ -1,6 +1,6 @@
 """Factory functions for creating tokenizers."""
 
-from bytetok.src.bytetok.basic_tok import BasicTokenizer
+from .tokenizers.basic import BasicTokenizer
 from bytetok.src.bytetok.exceptions import ModelLoadError, StrategyError
 from bytetok.src.bytetok.strategy import (
     AllowAllStrategy,
@@ -9,8 +9,8 @@ from bytetok.src.bytetok.strategy import (
     AllowNoneStrategy,
     SpecialTokenStrategy,
 )
-from .regex_tok import RegexTokenizer
-from .base_tok import MODEL_SUFFIX, Tokenizer
+from .tokenizers.regex import RegexTokenizer
+from .tokenizers.base import MODEL_SUFFIX, Tokenizer
 from pattern import TokenPattern
 
 from typing import Final, Literal, overload

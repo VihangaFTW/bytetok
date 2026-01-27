@@ -1,3 +1,5 @@
+"""Special token handling strategies for tokenization."""
+
 from typing import override
 from abc import ABC, abstractmethod
 import logging
@@ -9,6 +11,7 @@ log = logging.getLogger(__name__)
 
 
 class SpecialTokenStrategy(ABC):
+    """Base strategy for handling special tokens during encoding."""
     @abstractmethod
     def handle(self, text: str, special_toks: dict[str, Token]) -> dict[str, Token]:
         """Return the special tokens to use for encoding."""
@@ -38,6 +41,8 @@ class AllowNoneRaiseStrategy(SpecialTokenStrategy):
 
 
 class AllowNoneStrategy(SpecialTokenStrategy):
+    """Strategy that silently ignores all special tokens."""
+
     @override
     def handle(self, text: str, special_toks: dict[str, Token]) -> dict[str, Token]:
         if special_toks and not all(seq not in text for seq in special_toks):

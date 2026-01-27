@@ -91,9 +91,8 @@ class RegexTokenizer(Tokenizer):
         """
         Encode text into a sequence of tokens.
 
-        Args:
-            text: Text to encode.
-            strategy: Strategy to handle special tokens in `text`.
+        :param text: Text to encode.
+        :param strategy: Strategy to handle special tokens in `text`.
         """
 
         # no strategy is inferred as no special token handling
@@ -147,11 +146,8 @@ class RegexTokenizer(Tokenizer):
         Special token IDs are assigned sequentially starting from vocab_size.
         Must be called after training the tokenizer.
 
-        Args:
-            special_toks: List of special token strings to register.
-
-        Raises:
-            SpecialTokenError: If tokenizer hasn't been trained yet.
+        :param special_toks: List of special token strings to register.
+        :raises SpecialTokenError: If tokenizer hasn't been trained yet.
         """
         if not hasattr(self, "merges"):
             raise SpecialTokenError(
@@ -196,14 +192,9 @@ def _compile_pattern(pattern: str) -> re.Pattern:
     """
     Compile and validate a regex pattern.
 
-    Args:
-        pattern: Regex pattern string to compile.
-
-    Returns:
-        Compiled regex pattern.
-
-    Raises:
-        ValueError: If pattern is invalid.
+    :param pattern: Regex pattern string to compile.
+    :return: Compiled regex pattern.
+    :raises ValueError: If pattern is invalid.
     """
     try:
         return re.compile(pattern)
