@@ -10,7 +10,9 @@ log = logging.getLogger(__name__)
 
 
 class BasicTokenizer(Tokenizer):
-    """Tokenizer that operates directly on byte sequences without regex splitting."""
+    """Tokenizer that operates directly on byte sequences without regex splitting."""\
+        
+    TOKENIZER_TYPE = "basic"
 
     def __init__(self) -> None:
         super().__init__()

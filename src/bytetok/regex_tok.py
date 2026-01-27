@@ -18,6 +18,8 @@ log = logging.getLogger(__name__)
 class RegexTokenizer(Tokenizer):
     """Tokenizer that splits text using regex patterns before applying BPE."""
 
+    TOKENIZER_TYPE = "regex"
+
     def __init__(self, pattern: str | None = None) -> None:
         super().__init__()
         if pattern is not None:
