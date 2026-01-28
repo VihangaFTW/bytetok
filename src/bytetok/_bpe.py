@@ -41,7 +41,7 @@ def bpe_merge_with_freq_update(
     tokens: list[Token],
     target: BytePair,
     new_tok: Token,
-    counter: Counter,
+    counter: Counter[BytePair],
 ) -> list[Token]:
     """
     Merge target pair into new token and incrementally update frequency counter.

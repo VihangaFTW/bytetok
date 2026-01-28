@@ -14,19 +14,10 @@ dependencies = [
     "tiktoken>=0.12.0",
 ]
 
-
 [tool.setuptools]
 license-files = ["LICENSE"]
 
-
 [project.optional-dependencies]
-dev = [
-    "ipykernel>=7.1.0",
-    "ipywidgets>=8.1.8",
-]
-train = [
-    "datasets>=4.5.0",
-]
 
 [project.scripts]
 bytetok = "bytetok.tokenizers.basic:main"
