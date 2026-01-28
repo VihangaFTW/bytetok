@@ -7,7 +7,7 @@ from .._bpe import BytePair, Encoding, Token, Vocabulary, bpe_merge
 from .._sanitise import render_bytes
 from pathlib import Path
 from typing import Final, TYPE_CHECKING
-from ..exceptions import ModelLoadError
+from ..errors import ModelLoadError
 import logging
 
 if TYPE_CHECKING:

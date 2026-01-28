@@ -6,6 +6,7 @@ from .._bpe import Token, bpe_merge_with_freq_update
 from .base import Tokenizer
 import logging
 
+# need only classname for type annotation
 if TYPE_CHECKING:
     from ..strategy import SpecialTokenStrategy
 

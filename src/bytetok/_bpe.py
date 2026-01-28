@@ -22,7 +22,7 @@ def bpe_merge(tokens: list[Token], target: BytePair, new_tok: Token) -> list[Tok
 
     i = 0
     while i < len(tokens):
-        # check if we can form a pair and it matches the target.
+        # check if we can form a pair and it matches the target
         if (
             i < len(tokens) - 1
             and tokens[i] == target[0]
@@ -53,13 +53,14 @@ def bpe_merge_with_freq_update(
     Naiive algorithm: O(n × M).
     Current implementation: O(n × M)
 
+    where:
+
+    - n = token sequence length
+    - M = number of merges
+
     But current implementation is a bit faster per merge because it updates frequencies
     in the same pass, so we avoid an extra full scan to recompute counts each time.
     But overall training is still O(n × M) since we still do M passes over the sequence.
-
-    where:
-    n = token sequence length
-    M = number of merges
 
     Each merge requires a full O(n) scan of the token sequence.
 

@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 import logging
 from ._bpe import Token
 
-from .exceptions import SpecialTokenError
+from .errors import SpecialTokenError
 
 log = logging.getLogger(__name__)
 

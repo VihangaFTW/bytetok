@@ -2,7 +2,7 @@
 
 from typing import override
 
-from ..exceptions import PatternError, SpecialTokenError, VocabularyError
+from ..errors import PatternError, SpecialTokenError, VocabularyError
 from ..strategy import SpecialTokenStrategy
 
 from .base import Tokenizer

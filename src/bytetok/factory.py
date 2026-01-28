@@ -1,7 +1,7 @@
 """Factory functions for creating tokenizers."""
 
 from .tokenizers.basic import BasicTokenizer
-from .exceptions import ModelLoadError, StrategyError
+from .errors import ModelLoadError, StrategyError
 from .strategy import (
     AllowAllStrategy,
     AllowCustomStrategy,

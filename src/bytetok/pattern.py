@@ -1,6 +1,6 @@
 from enum import Enum
 
-from .exceptions import PatternError
+from .errors import PatternError
 
 
 class TokenPattern(str, Enum):
