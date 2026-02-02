@@ -3,7 +3,7 @@ Base tokenizer interface for byte-level tokenization implementations.
 """
 
 from abc import ABC, abstractmethod
-from .._bpe import BytePair, Encoding, Token, Vocabulary, bpe_merge
+from .._bpe import Encoding, Token, TokenPair, Vocabulary, slow_bpe_merge
 from .._sanitise import render_bytes
 from pathlib import Path
 from typing import Final, TYPE_CHECKING
@@ -295,7 +295,7 @@ class Tokenizer(ABC):
             # retrieve the byte pair with the lowest merge index.
             # because higher index tokens might depend on lower index merged tokens.
             # use dict.get() to avoid double lookup (membership check + retrieval).
-            pair: BytePair = min(
+            pair: TokenPair = min(
                 bigrams,
                 key=lambda bp: self.merges.get(bp, float("inf")),
             )
@@ -303,6 +303,6 @@ class Tokenizer(ABC):
             if pair not in self.merges:
                 break
             # merge target pair.
-            tokens = bpe_merge(tokens, pair, self.merges[pair])
+            tokens = slow_bpe_merge(tokens, pair, self.merges[pair])
 
         return tokens

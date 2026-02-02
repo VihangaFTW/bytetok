@@ -2,18 +2,20 @@
 
 from typing import override
 
-from ..errors import PatternError, SpecialTokenError, VocabularyError
+from ..errors import PatternError, SpecialTokenError, TrainingError, VocabularyError
+from ..pattern import TokenPattern
 from ..strategy import SpecialTokenStrategy
 
 from .base import Tokenizer
+from .._decorators import measure_time
 from .._bpe import (
     Encoding,
     Token,
     Vocabulary,
-    bpe_merge_with_freq_update,
 )
+from ..bpe import RustBPETrainer
+
 import regex as re
-from collections import Counter
 import logging
 
 
@@ -27,13 +29,16 @@ class RegexTokenizer(Tokenizer):
 
     def __init__(self, pattern: str | None = None) -> None:
         super().__init__()
-        if pattern is not None:
+        if pattern is None:
+            self.pat = TokenPattern.get("gpt4o")
+        else:
             self.pat = pattern
         self.compiled_pat: re.Pattern[str] = _compile_pattern(self.pat)
         self.special_toks: dict[str, Token] = {}
         self.inverted_special_tokens: dict[Token, str] = {}
 
     @override
+    @measure_time
     def train(
         self, text: str | list[str], vocab_size: int, verbose: bool = False
     ) -> None:
@@ -48,51 +53,15 @@ class RegexTokenizer(Tokenizer):
             text = "".join(text)
 
         # split text into chunks defined by pattern
-        chunks = re.findall(self.compiled_pat, text)
-        # convert each chunk to byte sequence
-        tokens: list[list[int]] = [
-            list(chunk.encode("utf-8", errors="replace")) for chunk in chunks
-        ]
+        chunks = [m.group(0) for m in re.finditer(self.compiled_pat, text)]
+        # convert each chunk to byte sequence and flatten into single sequence
+        tokens: list[int] = []
+        for chunk in chunks:
+            tokens.extend(list(chunk.encode("utf-8", errors="replace")))
 
         n_merges = vocab_size - 256
-        merges = {}
-        vocab = {tok: bytes([tok]) for tok in range(256)}
 
-        # compute initial byte-pair frequencies once across all chunks
-        bp_freqs: Counter = Counter()
-        for chunk_toks in tokens:
-            bp_freqs.update(zip(chunk_toks, chunk_toks[1:]))
-
-        # BPE algorithm with incremental frequency updates
-        for i in range(n_merges):
-            new_token = 256 + i
-            # check if any valid pairs remain
-            # 1. text compressed to single token
-            # 2. very short input text such that enough pairs cannot form
-            # 3. all chunks are compressed down to single tokens (or start as single tokens)
-            # before vocab size met
-            if not bp_freqs:
-                log.warning(
-                    f"no more byte pairs to merge after {i} merges "
-                    f"(requested {n_merges}). stopping early."
-                )
-                break
-            # find most common token pair
-            rank0 = bp_freqs.most_common(1)[0][0]
-            # merge pair within each chunk and update frequencies incrementally
-            tokens = [
-                bpe_merge_with_freq_update(chunk_toks, rank0, new_token, bp_freqs)
-                for chunk_toks in tokens
-            ]
-            # save merge info and update vocabulary with new token's mapping
-            merges[rank0] = new_token
-            vocab[new_token] = vocab[rank0[0]] + vocab[rank0[1]]
-            # debugging: log new merge info
-            if verbose:
-                log.info(f"merge {i + 1}/{n_merges}: {rank0} -> {new_token}")
-
-        self.merges: Encoding = merges
-        self.vocab: Vocabulary = vocab
+        self._train_rust(tokens, n_merges, verbose)
 
     @override
     def encode(
@@ -180,7 +149,7 @@ class RegexTokenizer(Tokenizer):
 
     def _apply_bpe_text(self, text: str) -> list[Token]:
         # split text into chunks as defined by pattern
-        chunks = re.findall(self.compiled_pat, text)
+        chunks = [m.group(0) for m in re.finditer(self.compiled_pat, text)]
 
         tokens: list[Token] = []
         # compress each text chunk into tokens via bpe
@@ -191,6 +160,41 @@ class RegexTokenizer(Tokenizer):
             )
 
         return tokens
+
+    def _train_rust(self, tokens: list[int], n_merges: int, verbose: bool) -> None:
+        """Train using fast Rust implementation."""
+
+        if len(tokens) == 0:
+            raise TrainingError("empty token sequence, no training performed")
+
+        trainer = RustBPETrainer(tokens, 256)
+
+        # train for n_merges
+        trainer.train(n_merges)
+
+        # get merge history
+        merge_history = trainer.get_merge_history()
+
+        # build merges dictionary and vocabulary
+        merges = {}
+        vocab = {tok: bytes([tok]) for tok in range(256)}
+
+        for (tok_a, tok_b), new_tok in merge_history:
+            pair = (tok_a, tok_b)
+            merges[pair] = new_tok
+            vocab[new_tok] = vocab[tok_a] + vocab[tok_b]
+
+            if verbose:
+                log.info(f"merge {len(merges)}/{n_merges}: {pair} -> {new_tok}")
+
+        if len(merge_history) < n_merges:
+            log.warning(
+                f"no more byte pairs to merge after {len(merge_history)} merges "
+                f"(requested {n_merges}). stopping early."
+            )
+
+        self.merges: Encoding = merges
+        self.vocab: Vocabulary = vocab
 
 
 def _compile_pattern(pattern: str) -> re.Pattern:

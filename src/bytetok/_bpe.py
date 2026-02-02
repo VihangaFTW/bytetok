@@ -3,15 +3,21 @@ Core Byte Pair Encoding (BPE) operations.
 """
 
 from collections import Counter
+from typing_extensions import deprecated
 
-type BytePair = tuple[int, int]
 type Token = int
 type TokenBytes = bytes
-type Encoding = dict[BytePair, Token]
+type TokenPair = tuple[Token, Token]
+type Encoding = dict[TokenPair, Token]
 type Vocabulary = dict[Token, TokenBytes]
 
 
-def bpe_merge(tokens: list[Token], target: BytePair, new_tok: Token) -> list[Token]:
+@deprecated(
+    "Reference implementation for documentation only. Use `RustBPETrainer()` for production."
+)
+def slow_bpe_merge(
+    tokens: list[Token], target: TokenPair, new_tok: Token
+) -> list[Token]:
     """
     Merge all occurrences of a target token pair into a single new token.
 
@@ -37,11 +43,14 @@ def bpe_merge(tokens: list[Token], target: BytePair, new_tok: Token) -> list[Tok
     return newtoks
 
 
-def bpe_merge_with_freq_update(
+@deprecated(
+    "Reference implementation for documentation only. Use `RustBPETrainer()` for production."
+)
+def slow_bpe_merge_with_freq_update(
     tokens: list[Token],
-    target: BytePair,
+    target: TokenPair,
     new_tok: Token,
-    counter: Counter[BytePair],
+    counter: Counter[TokenPair],
 ) -> list[Token]:
     """
     Merge target pair into new token and incrementally update frequency counter.
@@ -70,8 +79,7 @@ def bpe_merge_with_freq_update(
     However, it is not worth the effort to implement this complex algorithm in
     Python. Maybe in future, I might refactor with a binding to this implemented in Rust.
 
-    The current implementation is adequate for training datasets
-    under 100 MB with 10k-50k vocab size.
+    This implementation is adequate for training on small datasets.
 
     :param tokens: Current token sequence.
     :param target: The byte pair to merge.

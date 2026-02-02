@@ -1,0 +1,11 @@
+[package]
+name = "bpe"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "bpe"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.28.0", features = ["extension-module"] }

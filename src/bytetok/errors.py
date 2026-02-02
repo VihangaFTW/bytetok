@@ -61,7 +61,7 @@ class VocabularyError(ByteTokError):
 class TrainingError(ByteTokError):
     """Raised when tokenizer training fails."""
 
-    def __init__(self, message: str, *, vocab_size: int) -> None:
+    def __init__(self, message: str, *, vocab_size: int = 0) -> None:
         """Initialize with target vocabulary size."""
         super().__init__(message)
         self.vocab_size = vocab_size
