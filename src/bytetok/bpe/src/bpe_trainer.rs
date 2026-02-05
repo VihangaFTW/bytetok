@@ -11,10 +11,7 @@ use std::{
     ops::ControlFlow,
 };
 
-type Token = usize;
-/// Position of a token in token (text) sequence.
-type TextIdx = usize;
-type TokenFreq = usize;
+use crate::types::{TextIdx, Token, TokenFreq};
 
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone)]
 struct TokenPair(Token, Token);
@@ -111,7 +108,7 @@ impl BPETrainer {
     /// let tokens = vec![0, 1, 0, 1, 2];
     /// let mut trainer = BPETrainer::new(tokens, 256);
     /// ```
-    pub(crate) fn new(tokens: Vec<Token>, next_tok: Token) -> Self {
+    pub(crate) fn new(tokens: &[Token], next_tok: Token) -> Self {
         let n = tokens.len();
         // Create linked list storage.
         let mut nodes = Vec::with_capacity(n);
@@ -203,7 +200,8 @@ impl BPETrainer {
         }
 
         // Record merge in history.
-        self.merge_history.push(((merge_pair.0, merge_pair.1), new_tok_id));
+        self.merge_history
+            .push(((merge_pair.0, merge_pair.1), new_tok_id));
 
         // Un-track merged pair.
         self.pair_freqs.remove(&merge_pair);
@@ -457,8 +455,8 @@ mod tests {
 
     #[test]
     fn test_basic_merge() {
-        let tokens = vec![0, 1, 0, 0, 1, 1, 0, 0];
-        let mut trainer = BPETrainer::new(tokens, 2);
+        let tokens = [0, 1, 0, 0, 1, 1, 0, 0];
+        let mut trainer = BPETrainer::new(&tokens, 2);
         trainer.train(3);
         let final_tokens = trainer.get_encodings();
         // Should have fewer tokens than we started with.
@@ -467,22 +465,22 @@ mod tests {
 
     #[test]
     fn test_empty_sequence() {
-        let tokens = vec![];
-        let trainer = BPETrainer::new(tokens, 0);
-        assert_eq!(trainer.get_encodings(), vec![]);
+        let tokens = [];
+        let trainer = BPETrainer::new(&tokens, 0);
+        assert_eq!(trainer.get_encodings(), Vec::<usize>::new());
     }
 
     #[test]
     fn test_single_token() {
-        let tokens = vec![0];
-        let trainer = BPETrainer::new(tokens, 1);
+        let tokens = [0];
+        let trainer = BPETrainer::new(&tokens, 1);
         assert_eq!(trainer.get_encodings(), vec![0]);
     }
 
     #[test]
     fn test_no_merges_needed() {
-        let tokens = vec![0, 1, 2, 3];
-        let mut trainer = BPETrainer::new(tokens, 4);
+        let tokens = [0, 1, 2, 3];
+        let mut trainer = BPETrainer::new(&tokens, 4);
         // Try to merge but no pairs repeat.
         let merged = trainer.merge_step();
         // Should successfully merge once (any adjacent pair).

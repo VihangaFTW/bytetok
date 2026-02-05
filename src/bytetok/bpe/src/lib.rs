@@ -3,10 +3,22 @@
 //!
 //! This is a PyO3 extension module providing Python bindings.
 
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
+#![deny(clippy::panic)]
+#![deny(unused_must_use)]
+
 use pyo3::prelude::*;
+
+mod types;
+mod bpe_encoder;
+
+mod encoder;
 
 mod bpe_trainer;
 use bpe_trainer::BPETrainer;
+
+
 
 /// Python wrapper for BPE trainer.
 #[pyclass]
