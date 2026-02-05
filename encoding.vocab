@@ -445,8 +445,8 @@
 [444] [h][ave ] -> have 
 [445] [,][" ] -> ," 
 [446] [in ][the ] -> in the 
-[447] [y][\r\n] -> y\r\n
-[448] [th][is ] -> this 
+[447] [th][is ] -> this 
+[448] [y][\r\n] -> y\r\n
 [449] [t][er ] -> ter 
 [450] [w][ere ] -> were 
 [451] [d][er] -> der
@@ -533,8 +533,8 @@
 [532] [."\r\n\r\n]["] -> ."\r\n\r\n"
 [533] [h][ere ] -> here 
 [534] [o][f\r\n] -> of\r\n
-[535] [a][\r\n] -> a\r\n
-[536] [\xe2\x80\x9][9] -> \xe2\x80\x99
+[535] [\xe2\x80\x9][9] -> \xe2\x80\x99
+[536] [a][\r\n] -> a\r\n
 [537] [\xcf][\x8] -> \xcf\x8
 [538] [I][t ] -> It 
 [539] [s][o ] -> so 
@@ -855,9 +855,9 @@
 [854] [to ][be ] -> to be 
 [855] [l][a ] -> la 
 [856] [t][en ] -> ten 
-[857] [ig][n] -> ign
-[858] [pl][e ] -> ple 
-[859] [\r\n][ ] -> \r\n 
+[857] [\r\n][ ] -> \r\n 
+[858] [ig][n] -> ign
+[859] [pl][e ] -> ple 
 [860] [m][ade ] -> made 
 [861] [h][ow ] -> how 
 [862] [s][ol] -> sol
@@ -875,8 +875,8 @@
 [874] [i][e ] -> ie 
 [875] [electronic][ ] -> electronic 
 [876] [p][s ] -> ps 
-[877] [com][e ] -> come 
-[878] [\r\n ][ ] -> \r\n  
+[877] [\r\n ][ ] -> \r\n  
+[878] [com][e ] -> come 
 [879] [s][ibl] -> sibl
 [880] [c][our] -> cour
 [881] [y][s ] -> ys 
@@ -954,9 +954,9 @@
 [953] [the ][b] -> the b
 [954] [ful][l] -> full
 [955] [d][own] -> down
-[956] [o][oked ] -> ooked 
-[957] [\xa][b] -> \xab
-[958] [\r\n   ][ ] -> \r\n    
+[956] [\r\n   ][ ] -> \r\n    
+[957] [o][oked ] -> ooked 
+[958] [\xa][b] -> \xab
 [959] [with][out ] -> without 
 [960] [," ][said ] -> ," said 
 [961] [br][e] -> bre

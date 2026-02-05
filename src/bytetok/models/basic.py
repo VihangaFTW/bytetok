@@ -62,7 +62,7 @@ class BasicTokenizer(Tokenizer):
         # convert each byte to [0-255] token range
         tokens = list(txt_bytes)
         # return bpe of tokens
-        return self._apply_bpe_chunk(tokens)
+        return self._apply_fast_bpe_chunk(tokens)
 
     @override
     def decode(self, tokens: list[Token]) -> str:
@@ -103,3 +103,5 @@ class BasicTokenizer(Tokenizer):
 
         self.merges = merges  # used for encoding text -> tokens
         self.vocab = vocab  # used for decoding tokens -> text
+        # invalidate encoder cache since merges changed
+        self._encoder = None

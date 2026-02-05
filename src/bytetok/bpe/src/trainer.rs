@@ -13,23 +13,38 @@ use std::{
 
 use crate::types::{TextIdx, Token, TokenFreq};
 
+/// A pair of adjacent tokens in the training sequence.
+///
+/// Used as a key for tracking pair frequencies and positions during training.
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone)]
 struct TokenPair(Token, Token);
 
-/// Node in doubly-linked list.
-/// It is used to represent training token sequence.
+/// Node in doubly-linked list representing a token in the training sequence.
+///
+/// Uses index-based links rather than direct references to work within
+/// Rust's ownership system. Nodes are stored in a Vec<Option<Node>> arena.
 #[derive(Debug)]
 struct Node {
+    /// The token identifier at this position.
     token: Token,
-    /// Index of neighbouring nodes in token seq.
+    
+    /// Index of the previous node in the sequence, if any.
     prev_idx: Option<TextIdx>,
+    
+    /// Index of the next node in the sequence, if any.
     next_idx: Option<TextIdx>,
 }
 
-/// Item in max heap.
+/// Item in the max heap for tracking most frequent token pairs.
+///
+/// The heap may contain stale entries after merges, so frequencies
+/// must be validated against `pair_freqs` before use.
 #[derive(Debug, PartialEq, Eq)]
 struct HeapItem {
+    /// Frequency count of this token pair.
     freq: TokenFreq,
+    
+    /// The token pair being tracked.
     pair: TokenPair,
 }
 
@@ -224,7 +239,13 @@ impl BPETrainer {
         }
     }
 
-    /// Get the current token sequence as a vector.
+    /// Returns the current token sequence as a vector.
+    ///
+    /// Traverses the linked list from head to tail, collecting all tokens.
+    ///
+    /// # Returns
+    ///
+    /// A vector containing the current token sequence after all merges performed so far.
     pub(crate) fn get_encodings(&self) -> Vec<Token> {
         let mut result = Vec::new();
 
@@ -242,15 +263,25 @@ impl BPETrainer {
         result
     }
 
-    /// Get the merge history as a vector of ((token_a, token_b), merged_token).
+    /// Returns the complete history of merge operations.
+    ///
+    /// # Returns
+    ///
+    /// A vector of tuples `((left_token, right_token), merged_token)` in the order
+    /// they were performed. This history is used by the encoder to apply merges in
+    /// the correct order.
     pub(crate) fn get_merge_history(&self) -> Vec<((Token, Token), Token)> {
         self.merge_history.clone()
     }
 
-    /// Build initial pair frequencies from the linked list.
+    /// Builds initial pair frequencies from the linked list.
+    ///
+    /// Scans through the initial token sequence once, recording all adjacent
+    /// pairs and their frequencies, then populates the max heap.
     ///
     /// # Time Complexity
-    /// This scans the sequence once: O(N).
+    ///
+    /// O(N) where N is the length of the initial token sequence.
     fn build_initial_pairs(&mut self) {
         let mut cur_idx = self.head_idx;
 
@@ -281,8 +312,14 @@ impl BPETrainer {
         }
     }
 
-    /// Remove and get most frequent (pair, freq) from max heap.
-    /// Return None if no pair exists.
+    /// Removes and returns the most frequent token pair from the max heap.
+    ///
+    /// Continuously pops from the heap until finding an entry whose frequency
+    /// matches the current frequency in `pair_freqs`, filtering out stale entries.
+    ///
+    /// # Returns
+    ///
+    /// `Some((pair, frequency))` if a valid pair exists, `None` if no pairs remain.
     fn get_max_pair(&mut self) -> Option<(TokenPair, TokenFreq)> {
         // After merges, some entries in the heap will have stale counts.
         // So we need to keep popping from the heap until we find
@@ -299,11 +336,19 @@ impl BPETrainer {
         None
     }
 
-    /// Update bookkeeping data regarding neighbouring pairs
-    /// such as their start position and counts.
-    /// Called when left and right neighbor pairs are removed
-    /// after a merge because their counts need to decrease.
-    /// The actual nodes in the linked list are NOT modified.
+    /// Updates bookkeeping for a pair occurrence being removed.
+    ///
+    /// Decrements the pair's frequency and removes its position from tracking.
+    /// Called when neighbor pairs are invalidated after a merge.
+    ///
+    /// # Arguments
+    ///
+    /// * `idx` - Position where the pair occurrence is being removed.
+    /// * `pair` - The token pair being removed.
+    ///
+    /// # Note
+    ///
+    /// This only updates tracking structures; the actual linked list nodes are not modified.
     fn remove_pair_at(&mut self, idx: TextIdx, pair: TokenPair) {
         // Decrement count.
         if let Some(freq) = self.pair_freqs.get_mut(&pair)
@@ -318,8 +363,19 @@ impl BPETrainer {
         }
     }
 
-    /// Add a pair occurrence at a specific position.
-    /// The actual nodes in the linked list are NOT modified.
+    /// Adds a new pair occurrence at a specific position.
+    ///
+    /// Increments the pair's frequency, records its position, and adds it to the heap.
+    /// Called when new mergeable pairs appear after a merge operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `idx` - Position where the pair occurs.
+    /// * `pair` - The token pair being added.
+    ///
+    /// # Note
+    ///
+    /// This only updates tracking structures; the actual linked list nodes are not modified.
     fn add_pair_at(&mut self, idx: usize, pair: TokenPair) {
         // Add position.
         self.pair_positions.entry(pair).or_default().insert(idx);
@@ -331,6 +387,17 @@ impl BPETrainer {
         self.heap.push(HeapItem { freq: *freq, pair });
     }
 
+    /// Adds new neighbor pairs formed after a merge operation.
+    ///
+    /// After merging two tokens, the new merged token may form new pairs with
+    /// its left and right neighbors that need to be tracked.
+    ///
+    /// # Arguments
+    ///
+    /// * `new_tok_id` - The token ID of the newly merged token.
+    /// * `idx1` - Position of the merged token.
+    /// * `cur_prev_idx` - Index of the left neighbor, if any.
+    /// * `new_next_idx` - Index of the right neighbor, if any.
     fn add_neighbours(
         &mut self,
         new_tok_id: TextIdx,
@@ -355,6 +422,17 @@ impl BPETrainer {
         }
     }
 
+    /// Performs the actual merge operation in the linked list.
+    ///
+    /// Updates the first node to contain the merged token, relinks the list to
+    /// skip the second node, and marks the second node as deleted.
+    ///
+    /// # Arguments
+    ///
+    /// * `next_idx` - Index of the node after the merge pair.
+    /// * `tok_id` - Token ID of the merged token.
+    /// * `idx1` - Index of the first node in the pair.
+    /// * `idx2` - Index of the second node in the pair (will be marked deleted).
     fn merge_pair_in_list(
         &mut self,
         next_idx: Option<TextIdx>,
@@ -379,8 +457,16 @@ impl BPETrainer {
         self.nodes[idx2] = None;
     }
 
-    /// Decrement neighbour pair counts and update global pair positions
-    /// during a merge step.
+    /// Removes old neighbor pairs that become invalid after a merge.
+    ///
+    /// When two tokens are merged, their pairs with their left and right neighbors
+    /// are no longer valid and must be removed from tracking.
+    ///
+    /// # Arguments
+    ///
+    /// * `merge_pair` - The pair being merged.
+    /// * `idx1` - Index of the first token in the merge pair.
+    /// * `idx2` - Index of the second token in the merge pair.
     fn remove_neighbours(&mut self, merge_pair: TokenPair, idx1: TextIdx, idx2: TextIdx) {
         // Remove old left neighbour if it exists.
         if let Some(prev_idx) = self.nodes[idx1].as_ref().and_then(|n| n.prev_idx)
@@ -400,8 +486,19 @@ impl BPETrainer {
         }
     }
 
-    /// Extracts and verifies the indices of two nodes
-    /// representing given `pair` at `self.nodes[pos]`.
+    /// Extracts and verifies the indices of two nodes for a merge operation.
+    ///
+    /// Validates that the pair still exists at the given position and hasn't
+    /// been invalidated by previous merges.
+    ///
+    /// # Arguments
+    ///
+    /// * `pair` - The token pair to verify.
+    /// * `pos` - Position where the pair is expected to start.
+    ///
+    /// # Returns
+    ///
+    /// `Continue((idx1, idx2))` with the node indices if valid, or `Break(())` if invalid.
     fn get_merge_idxs(
         &mut self,
         pair: TokenPair,
@@ -432,7 +529,9 @@ impl BPETrainer {
         ControlFlow::Continue((idx1, idx2))
     }
 
-    /// Print the current state for debugging.
+    /// Prints the current state for debugging purposes.
+    ///
+    /// Outputs the current token sequence and the top 5 most frequent pairs.
     pub(crate) fn print_state(&self) {
         print!("Tokens: ");
         for token in self.get_encodings() {

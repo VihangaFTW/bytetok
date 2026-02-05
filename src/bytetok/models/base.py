@@ -3,6 +3,7 @@ Base tokenizer interface for byte-level tokenization implementations.
 """
 
 from abc import ABC, abstractmethod
+from warnings import deprecated
 from .._bpe import Encoding, Token, TokenPair, Vocabulary, slow_bpe_merge
 from .._sanitise import render_bytes
 from pathlib import Path
@@ -12,6 +13,7 @@ import logging
 
 if TYPE_CHECKING:
     from ..strategy import SpecialTokenStrategy
+    from ..bpe import RustBPEEncoder
 
 PREFIX: Final[str] = "ByteTok"
 VERSION: Final[str] = "0.1.0"
@@ -40,6 +42,8 @@ class Tokenizer(ABC):
         self.special_toks: dict[str, Token] = {}
         # tokens -> bytes
         self.vocab: Vocabulary = self._build_vocab()
+        # cached Rust encoder for fast BPE
+        self._encoder: "RustBPEEncoder | None" = None
 
     @abstractmethod
     def train(
@@ -187,6 +191,8 @@ class Tokenizer(ABC):
         self.special_toks = special_toks
         self.merges = merges
         self.vocab = self._build_vocab()
+        # invalidate encoder cache since merges changed
+        self._encoder = None
 
         log.info(
             f"model loaded successfully: {len(self.special_toks)} special tokens, {len(self.merges)} merge rules, {len(self.vocab)} total tokens"
@@ -279,7 +285,10 @@ class Tokenizer(ABC):
                     # one of base 256 tokens: no merging
                     f.write(f"[{tok}] {subword}\n")
 
-    def _apply_bpe_chunk(self, tokens: list[Token]) -> list[Token]:
+    @deprecated(
+        "Reference implementation for documentation only. Use `_apply_fast_bpe_chunk` for production."
+    )
+    def _apply_slow_bpe_chunk(self, tokens: list[Token]) -> list[Token]:
         """
         Apply BPE merges to a token sequence.
 
@@ -306,3 +315,31 @@ class Tokenizer(ABC):
             tokens = slow_bpe_merge(tokens, pair, self.merges[pair])
 
         return tokens
+
+    def _apply_fast_bpe_chunk(self, tokens: list[Token]) -> list[Token]:
+        """
+        Apply BPE merges using fast Rust implementation.
+
+        :param tokens: List of tokens (initially bytes 0-255).
+        :returns: Compressed token sequence after applying learned merges.
+        """
+        if not self.merges:
+            return tokens
+
+        # Build or retrieve cached encoder.
+        if self._encoder is None:
+            # Build merge history from dict.
+            # Note: self.merges dict preserves insertion order (Python 3.7+),
+            # but we sort by token ID to handle cases where order may not be
+            # preserved (e.g., loading from files, manual construction).
+            # Token IDs are sequential (256, 257, ...) representing merge order.
+            # This sorting is O(M log M) but only happens once (cached).
+            merge_history = sorted(self.merges.items(), key=lambda x: x[1])
+
+            # Create Rust encoder.
+            from bytetok.bpe import RustBPEEncoder
+
+            self._encoder = RustBPEEncoder(merge_history)
+
+        # Apply all merges using O(N log N) algorithm.
+        return self._encoder.encode(tokens)

@@ -96,7 +96,9 @@ class RegexTokenizer(Tokenizer):
                 tokens.append(special_toks[chunk])
             else:
                 tokens.extend(
-                    self._apply_bpe_chunk(list(chunk.encode("utf-8", errors="replace")))
+                    self._apply_fast_bpe_chunk(
+                        list(chunk.encode("utf-8", errors="replace"))
+                    )
                 )
 
         return tokens
@@ -156,7 +158,9 @@ class RegexTokenizer(Tokenizer):
         for chunk in chunks:
             # aggregate local tokens to global compressed token sequence
             tokens.extend(
-                self._apply_bpe_chunk(list(chunk.encode("utf-8", errors="replace")))
+                self._apply_fast_bpe_chunk(
+                    list(chunk.encode("utf-8", errors="replace"))
+                )
             )
 
         return tokens
@@ -195,6 +199,8 @@ class RegexTokenizer(Tokenizer):
 
         self.merges: Encoding = merges
         self.vocab: Vocabulary = vocab
+        # invalidate encoder cache since merges changed
+        self._encoder = None
 
 
 def _compile_pattern(pattern: str) -> re.Pattern:
