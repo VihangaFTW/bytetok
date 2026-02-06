@@ -114,6 +114,21 @@ def list_patterns() -> list[str]:
 
 
 def get_pattern(name: Pattern) -> str:
+    """
+    Get the regex pattern string for a specific built-in pattern by name.
+
+    :param name: Name of the built-in pattern (case-insensitive).
+    :return: The regex pattern string.
+    :raises PatternError: If the pattern name is unknown.
+
+    .. code-block:: python
+
+        # Get a specific pattern string
+        pattern_str = get_pattern("llama3")
+
+        # Use it to create a tokenizer
+        tokenizer = RegexTokenizer(pattern=pattern_str)
+    """
     return TokenPattern.get(name)
 
 

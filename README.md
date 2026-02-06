@@ -2,7 +2,7 @@
 
 A fast, modular and light-weight BPE tokenizer for NLP research and prototyping.
 
-ByteTok implements Byte Pair Encoding (BPE) at the byte-level with a Rust-accelerated core for training and encoding. Text is first converted to raw bytes (0-255), then iteratively merged using learned pair statistics. The training algorithm is based on [Algorithm 2](https://aclanthology.org/2023.findings-acl.38.pdf) from _"Byte Pair Encoding is Suboptimal for Language Model Pretraining"_, achieving O(N log V) training and O(N log N) encoding versus the naive O(NV) approach.
+ByteTok implements Byte Pair Encoding (BPE) at the byte-level with a Rust-accelerated core for training and encoding. Text is first converted to raw bytes (0-255), then iteratively merged using learned pair statistics. The training algorithm is based on [Algorithm 2](https://aclanthology.org/2023.findings-acl.38.pdf) from _"A Formal Perspective on Byte-Pair Encoding"_, achieving O(N log V) training and O(N log N) encoding versus the naive O(NV) approach.
 
 ## History
 
@@ -15,7 +15,7 @@ This project started as a weekend experiment with BPE for text compression. I la
 
 Libraries like OpenAI's [tiktoken](https://github.com/openai/tiktoken) and Google's [sentencepiece](https://github.com/google/sentencepiece) exist and are probably better for production work. But ByteTok wasn't designed to compete with them or benchmaxx. I wanted a straightforward API that took a string and returned a list of integers; not something that forced me to read through documentation for 200 function arguments (looking at you, `sentencepiece`).
 
-As my dataset requirements grew, the naive BPE implementation started struggling. So I rewrote the trainer and encoder in Rust using an O(N log N) algorithm 😎.
+As my dataset requirements grew, the naive BPE implementation started struggling. So I rewrote the trainer and encoder in Rust using a much more efficient algorithm 😎.
 
 ## Features
 
@@ -150,6 +150,22 @@ Return the names of all available built-in regex patterns.
 bytetok.list_patterns()
 # ['GPT2', 'GPT4', 'GPT4O', 'LLAMA3', 'QWEN2', 'DEEPSEEK_CODER', 'DEEPSEEK_LLM',
 #  'STARCODER', 'FALCON', 'BLOOM']
+```
+
+#### `bytetok.get_pattern(name)`
+
+Get the regex pattern string for a specific built-in pattern by name.
+
+- **name** (`str`) -- Name of the built-in pattern (case-insensitive).
+- **Returns:** `str` -- The regex pattern string.
+- **Raises:** `PatternError` if the pattern name is unknown.
+
+```python
+# get a specific pattern string
+pattern_str = bytetok.get_pattern("llama3")
+
+# use it to create a tokenizer
+tokenizer = bytetok.RegexTokenizer(pattern=pattern_str)
 ```
 
 #### `bytetok.list_strategies()`
