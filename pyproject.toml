@@ -7,7 +7,10 @@ license = { text = "MIT" }
 classifiers = ["License :: OSI Approved :: MIT License"]
 authors = [{ name = "Vihanga Malaviarachchi" }]
 requires-python = ">=3.13"
-dependencies = ["regex>=2026.1.15"]
+dependencies = [
+    "datasets>=4.5.0",
+    "regex>=2026.1.15",
+]
 
 [tool.setuptools]
 license-files = ["LICENSE"]

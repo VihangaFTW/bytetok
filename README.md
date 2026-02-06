@@ -4,10 +4,9 @@ A fast, modular and light-weight BPE tokenizer for NLP research and prototyping.
 
 ByteTok implements Byte Pair Encoding (BPE) at the byte-level with a Rust-accelerated core for training and encoding. Text is first converted to raw bytes (0-255), then iteratively merged using learned pair statistics. The training algorithm is based on [Algorithm 2](https://aclanthology.org/2023.findings-acl.38.pdf) from _"Byte Pair Encoding is Suboptimal for Language Model Pretraining"_, achieving O(N log V) training and O(N log N) encoding versus the naive O(NV) approach.
 
-
 ## History
 
-This project started as a weekend experiment with BPE for text compression. I later needed a tokenizer for my custom GPT, which was bottlenecked by context length due to character-level encoding. I wanted a simple API that did four things correctly at reasonable speed:
+This project started as a weekend experiment with BPE for text compression. I later needed a tokenizer for my custom GPT, which was bottlenecked by context length due to character-level encoding. I wanted a simple API that did four things correctly at a reasonable speed:
 
 - Train on custom text
 - Save learned encodings
@@ -25,6 +24,18 @@ As my dataset requirements grew, the naive BPE implementation started struggling
 - **Custom patterns** supported alongside the built-in presets.
 - **Special token strategies** for controlling how special tokens are handled during encoding.
 - **Serialization** with versioned `.model` / `.vocab` file format and `from_pretrained()` loader.
+
+## Benchmarks
+
+Benchmarks were run on Linux x86_64 with an Intel Core i7-12700H (20 cores @ 4.70 GHz) and 32GB DDR5 RAM.
+
+| Dataset                                                                                     | Corpus Size            | Vocab Size | Training Time      | Encoding Throughput           | Decoding Throughput | Compression Ratio | Size Reduction |
+| ------------------------------------------------------------------------------------------- | ---------------------- | ---------- | ------------------ | ----------------------------- | ------------------- | ----------------- | -------------- |
+| [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci-Fi-Books-gutenberg) | 88.85 MB (93M chars)   | 25,000     | 198s (~3.3 mins)   | 2.99M chars/sec (2.85 MB/sec) | 19.2M tokens/sec    | 1.43x             | 30.3%          |
+| [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci-Fi-Books-gutenberg) | 216.96 MB (227M chars) | 10,000     | 523s (~8.7 mins)   | 2.86M chars/sec (2.73 MB/sec) | 17.1M tokens/sec    | 1.60x             | 37.7%          |
+| [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci-Fi-Books-gutenberg) | 216.96 MB (227M chars) | 25,000     | 579s (~9.65 mins)  | 2.85M chars/sec (2.72 MB/sec) | 17.0M tokens/sec    | 1.68x             | 40.6%          |
+| [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci-Fi-Books-gutenberg) | 216.96 MB (227M chars) | 50,000     | 640s (~10.7 mins)  | 2.76M chars/sec (2.63 MB/sec) | 16.4M tokens/sec    | 1.75x             | 42.7%          |
+| [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci-Fi-Books-gutenberg) | 326.96 MB (343M chars) | 50,000     | 1048s (~17.5 mins) | 2.82M chars/sec (2.69 MB/sec) | 7.02M tokens/sec    | 1.44x             | 30.7%          |
 
 ## Requirements
 

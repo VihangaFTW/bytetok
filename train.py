@@ -39,7 +39,7 @@ def benchmark_training():
 
     # Create tokenizer.
     tokenizer = RegexTokenizer()
-    vocab_size = 50_000
+    vocab_size = 10_000
 
     # Benchmark training.
     print(f"\n🔧 Training tokenizer (vocab_size={vocab_size})...")
@@ -61,12 +61,20 @@ def benchmark_training():
     encoded = tokenizer.encode(text)
     encode_time = time.perf_counter() - encode_start
 
+    # Verify encoding correctness.
+    assert len(encoded) > 0, "Encoding produced no tokens"
+    assert all(0 <= token < len(tokenizer.vocab) for token in encoded), (
+        "Invalid token IDs in encoded output"
+    )
+    assert len(encoded) < len(text.encode("utf-8")), "Encoding should compress the text"
+
     chars_per_sec = len(text) / encode_time
     mb_per_sec = text_size / encode_time / (1024 * 1024)
 
     print(f"   ✓ Encode time: {encode_time * 1000:.2f}ms")
     print(f"   ✓ Throughput: {chars_per_sec:,.0f} chars/sec ({mb_per_sec:.2f} MB/sec)")
     print(f"   ✓ Tokens generated: {len(encoded):,}")
+    print(f"   ✓ Encoding verified: all tokens valid")
 
     # Benchmark decoding.
     print("\n🔄 Benchmarking decoding...")
@@ -76,11 +84,15 @@ def benchmark_training():
 
     tokens_per_sec = len(encoded) / decode_time
 
+    # Verify decoding correctness.
+    assert isinstance(decoded, str), "Decoded output is not a string"
+    assert len(decoded) > 0, "Decoding produced empty string"
+    assert decoded == text, (
+        f"Decode failed: output doesn't match input (got {len(decoded)} chars, expected {len(text)} chars)"
+    )
+
     print(f"   ✓ Decode time: {decode_time * 1000:.2f}ms")
     print(f"   ✓ Throughput: {tokens_per_sec:,.0f} tokens/sec")
-
-    # Verify correctness.
-    assert decoded == text, "Decode failed: output doesn't match input"
     print("   ✓ Decoding verified: output matches input")
 
     # Compression stats.
