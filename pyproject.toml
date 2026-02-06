@@ -7,10 +7,14 @@ license = { text = "MIT" }
 classifiers = ["License :: OSI Approved :: MIT License"]
 authors = [{ name = "Vihanga Malaviarachchi" }]
 requires-python = ">=3.13"
-dependencies = [
-    "datasets>=4.5.0",
-    "regex>=2026.1.15",
-]
+dependencies = ["regex>=2026.1.15"]
+
+keywords = ["bpe", "tokenizer", "nlp", "byte-pair-encoding"]
+
+[project.urls]
+Homepage = "https://github.com/VihangaFTW/bytetok"
+Repository = "https://github.com/VihangaFTW/bytetok"
+Issues = "https://github.com/VihangaFTW/bytetok/issues"
 
 [tool.setuptools]
 license-files = ["LICENSE"]

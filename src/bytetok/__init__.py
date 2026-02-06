@@ -20,6 +20,10 @@ from .strategy import (
     SpecialTokenStrategy,
 )
 
+from importlib.metadata import version
+
+__version__ = version("bytetok")
+
 __all__ = [
     "Tokenizer",
     "BasicTokenizer",
