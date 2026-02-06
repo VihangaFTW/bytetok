@@ -1,5 +1,9 @@
 # ByteTok
 
+[![CI](https://github.com/VihangaFTW/bytetok/actions/workflows/release.yaml/badge.svg)](https://github.com/VihangaFTW/bytetok/actions/workflows/release.yaml)
+[![Python versions](https://img.shields.io/pypi/pyversions/bytetok)](https://pypi.org/project/bytetok/)
+[![License](https://img.shields.io/pypi/l/bytetok)](https://github.com/VihangaFTW/bytetok/blob/main/LICENSE)
+
 A fast, modular and light-weight BPE tokenizer for NLP research and prototyping.
 
 ByteTok implements Byte Pair Encoding (BPE) at the byte-level with a Rust-accelerated core for training and encoding. Text is first converted to raw bytes (0-255), then iteratively merged using learned pair statistics. The training algorithm is based on [Algorithm 2](https://aclanthology.org/2023.findings-acl.38.pdf) from _"A Formal Perspective on Byte-Pair Encoding"_, achieving O(N log V) training and O(N log N) encoding versus the naive O(NV) approach.
