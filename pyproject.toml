@@ -11,7 +11,7 @@ classifiers = [
 ]
 authors = [{ name = "Vihanga Malaviarachchi" }]
 requires-python = ">=3.13"
-dependencies = ["regex>=2026.1.15"]
+dependencies = ["regex"]
 
 keywords = ["bpe", "tokenizer", "nlp", "byte-pair-encoding"]
 
