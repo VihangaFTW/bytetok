@@ -20,9 +20,12 @@ from .strategy import (
     SpecialTokenStrategy,
 )
 
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 
-__version__ = version("bytetok")
+try:
+    __version__ = version("bytetok")
+except PackageNotFoundError:
+    __version__ = "dev"
 
 __all__ = [
     "Tokenizer",
