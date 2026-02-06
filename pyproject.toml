@@ -1,7 +1,7 @@
 [project]
 name = "bytetok"
 version = "0.1.0"
-description = "Fast, modular BPE tokenizer for NLP research and prototyping"
+description = "A fast, modular and light-weight BPE tokenizer for NLP research and prototyping."
 readme = "README.md"
 license = { text = "MIT" }
 classifiers = ["License :: OSI Approved :: MIT License"]

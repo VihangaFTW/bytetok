@@ -1,10 +1,9 @@
 # ByteTok
 
-A fast, modular byte-level BPE tokenizer with zero dependencies for NLP research and prototyping.
+A fast, modular and light-weight BPE tokenizer for NLP research and prototyping.
 
-ByteTok implements Byte Pair Encoding (BPE) with a Rust-accelerated core for training and encoding. Text is first converted to raw bytes (0-255), then iteratively merged using learned pair statistics. The training algorithm is based on [Algorithm 2](https://aclanthology.org/2023.findings-acl.38.pdf) from _"Byte Pair Encoding is Suboptimal for Language Model Pretraining"_, achieving O(N log V) training and O(N log N) encoding versus the naive O(NV) approach.
+ByteTok implements Byte Pair Encoding (BPE) at the byte-level with a Rust-accelerated core for training and encoding. Text is first converted to raw bytes (0-255), then iteratively merged using learned pair statistics. The training algorithm is based on [Algorithm 2](https://aclanthology.org/2023.findings-acl.38.pdf) from _"Byte Pair Encoding is Suboptimal for Language Model Pretraining"_, achieving O(N log V) training and O(N log N) encoding versus the naive O(NV) approach.
 
-\*_ByteTok does rely on the `regex` package but I digress._
 
 ## History
 

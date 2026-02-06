@@ -3,7 +3,7 @@ Core Byte Pair Encoding (BPE) operations.
 """
 
 from collections import Counter
-from typing_extensions import deprecated
+from warnings import deprecated
 
 type Token = int
 type TokenBytes = bytes
