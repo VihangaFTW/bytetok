@@ -36,7 +36,7 @@ class BPETrainer:
        >>> trainer = BPETrainer()
        >>> result = trainer.train(tokens, n_merges=10)
        >>> print(f"Learned {result.n_merges_completed} merges")
-       >>> print(f"Vocabulary size: {result.vocab_size}")
+       >>> print(f"Vocabulary size: {len(result.vocab)}")
     """
 
     def __init__(self) -> None:

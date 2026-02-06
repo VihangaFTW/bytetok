@@ -7,6 +7,7 @@ from .factory import (
     from_pretrained,
     get_strategy,
     get_tokenizer,
+    get_pattern,
     list_patterns,
     list_strategies,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "AllowCustomStrategy",
     "get_tokenizer",
     "get_strategy",
+    "get_pattern",
     "from_pretrained",
     "list_patterns",
     "list_strategies",

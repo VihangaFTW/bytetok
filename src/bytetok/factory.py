@@ -100,7 +100,6 @@ Pattern = Literal[
     "starcoder",
     "falcon",
     "bloom",
-    "chatglm4",
 ]
 
 _TOKENIZER_REGISTRY: Final[dict[str, type[Tokenizer]]] = {

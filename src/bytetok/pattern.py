@@ -99,16 +99,6 @@ class TokenPattern(str, Enum):
     # multilingual models
     BLOOM = r" ?[^(\s|.,!?…。，、।۔،)]+"
 
-    CHATGLM4 = (
-        r"(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|"
-        r"[^\r\n\p{L}\p{N}]?\p{L}+|"
-        r"\p{N}{1,3}|"
-        r" ?[^\s\p{L}\p{N}]+[\r\n]*|"
-        r"\s*[\r\n]+|"
-        r"\s+(?!\S)|"
-        r"\s+"
-    )
-
     @classmethod
     def get(cls, name: str) -> str:
         """Get patterns by name (case-insensitive)."""

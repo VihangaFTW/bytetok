@@ -35,6 +35,7 @@ ENV/
 *.swo
 *~
 .DS_Store
+.cursor
 
 # Jupyter Notebook
 .ipynb_checkpoints/
@@ -69,3 +70,8 @@ Thumbs.db
 tmp/
 temp/
 .tmp/
+
+
+# training outputs
+*.model
+*.vocab

@@ -6,16 +6,12 @@ readme = "README.md"
 license = { text = "MIT" }
 classifiers = ["License :: OSI Approved :: MIT License"]
 authors = [{ name = "Vihanga Malaviarachchi" }]
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 dependencies = ["regex>=2026.1.15"]
 
 [tool.setuptools]
 license-files = ["LICENSE"]
 
-[project.optional-dependencies]
-
-[project.scripts]
-bytetok = "bytetok.tokenizers.basic:main"
 
 [build-system]
 requires = ["maturin>=1.0,<2.0"]
