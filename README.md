@@ -244,6 +244,8 @@ text = tok.decode(tokens)
 
 All methods are inherited from `Tokenizer`. The `strategy` parameter on `encode()` is accepted but ignored.
 
+It is recommended not to use this class. Use `RegexTokenizer` instead.
+
 ---
 
 #### `RegexTokenizer(pattern=None)`

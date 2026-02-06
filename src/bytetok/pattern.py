@@ -103,7 +103,7 @@ class TokenPattern(str, Enum):
     def get(cls, name: str) -> str:
         """Get patterns by name (case-insensitive)."""
         try:
-            return cls[name.upper()].value
+            return cls[name.upper().replace("-", "_")].value
         except KeyError:
             raise PatternError(
                 f"Unknown pattern: {name!r}. "
