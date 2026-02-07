@@ -1,8 +1,8 @@
 """ByteTok: Byte-level tokenization library."""
 
-from .models.base import Tokenizer
-from .models.basic import BasicTokenizer
-from .models.regex import RegexTokenizer
+from ._models.base import Tokenizer
+from ._models.basic import BasicTokenizer
+from ._models.regex import RegexTokenizer
 from .factory import (
     from_pretrained,
     get_strategy,

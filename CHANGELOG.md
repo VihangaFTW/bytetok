@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-02-07
+
+### Fixed
+
+- Fixed duplicate symbol exports in `__init__.py` and `__init__.pyi` that caused redundant auto-imports and member completions in IDEs.
+- Updated `TokenPattern` documentation by turning the regex pattern table into a list and removing the Source column.
+- Clarified that `BasicTokenizer` lossy decoding refers to UTF-8 reconstruction during `decode()` (uses `errors="replace"`).
+
 ## [0.1.1] - 2026-02-06
 
 ### Fixed

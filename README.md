@@ -187,7 +187,7 @@ bytetok.list_strategies()
 
 All tokenizers inherit from the abstract base class `Tokenizer`. The two concrete implementations are `BasicTokenizer` and `RegexTokenizer`.
 
-> The `BasicTokenizer` serves as a documentation for the simplest implementation of a BPE tokenizer. It is **not recommended** for actual use due to its lossy nature when decoding multi-byte utf-8 sequences.
+> The `BasicTokenizer` serves as a documentation for the simplest implementation of a BPE tokenizer. It is **not recommended** for actual use because `decode()` reconstructs text by decoding a raw byte stream as UTF-8 with replacement (`errors="replace"`), which can lose information for invalid UTF-8 byte sequences (e.g. broken multi-byte codepoints become `�`).
 >
 > All ByteTok's factory methods default to `RegexTokenizer`. For custom extensions or implementations, always inherit from `RegexTokenizer`.
 
@@ -326,18 +326,16 @@ pattern = bytetok.TokenPattern.get("gpt4o")
 
 #### Available Patterns
 
-| Name             | Source            |
-| ---------------- | ----------------- |
-| `gpt2`           | OpenAI GPT-2      |
-| `gpt4`           | OpenAI GPT-4      |
-| `gpt4o`          | OpenAI GPT-4o     |
-| `llama3`         | Meta LLaMA 3      |
-| `qwen2`          | Alibaba Qwen 2    |
-| `deepseek-coder` | DeepSeek Coder    |
-| `deepseek-llm`   | DeepSeek LLM      |
-| `starcoder`      | BigCode StarCoder |
-| `falcon`         | TII Falcon        |
-| `bloom`          | BigScience BLOOM  |
+- `gpt2`
+- `gpt4`
+- `gpt4o`
+- `llama3`
+- `qwen2`
+- `deepseek-coder`
+- `deepseek-llm`
+- `starcoder`
+- `falcon`
+- `bloom`
 
 ---
 

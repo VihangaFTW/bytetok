@@ -1,6 +1,6 @@
 """Factory functions for creating tokenizers."""
 
-from .models.basic import BasicTokenizer
+from ._models.basic import BasicTokenizer
 from .errors import ModelLoadError, StrategyError
 from .strategy import (
     AllowAllStrategy,
@@ -9,8 +9,8 @@ from .strategy import (
     AllowNoneStrategy,
     SpecialTokenStrategy,
 )
-from .models.regex import RegexTokenizer
-from .models.base import MODEL_SUFFIX, Tokenizer
+from ._models.regex import RegexTokenizer
+from ._models.base import MODEL_SUFFIX, Tokenizer
 from .pattern import TokenPattern
 
 from typing import Final, Literal, overload

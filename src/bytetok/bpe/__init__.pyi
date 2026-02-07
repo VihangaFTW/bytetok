@@ -1,8 +1,13 @@
-"""Typing stubs for the `bytetok._bpe_rs` Rust extension module.
+"""Typing stubs for the `bytetok.bpe` public wrapper module.
 
-This file provides static type information for the compiled PyO3
-module `bytetok._bpe_rs` so that type checkers such as Pyright can resolve
-exported symbols like `RustBPETrainer`.
+This file intentionally exposes Rust-backed symbols via the public path
+`bytetok.bpe` so tooling prefers:
+
+`from bytetok.bpe import RustBPETrainer`
+
+over the internal extension path:
+
+`from bytetok._bpe_rs import RustBPETrainer`
 """
 
 from __future__ import annotations
@@ -20,3 +25,5 @@ class RustBPEEncoder:
     def encode(self, tokens: list[int]) -> list[int]: ...
     def can_merge(self, left: int, right: int) -> bool: ...
     def num_merges(self) -> int: ...
+
+__all__ = ["RustBPETrainer", "RustBPEEncoder"]
