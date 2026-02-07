@@ -1,6 +1,7 @@
 # ByteTok
 
 [![CI](https://github.com/VihangaFTW/bytetok/actions/workflows/release.yaml/badge.svg)](https://github.com/VihangaFTW/bytetok/actions/workflows/release.yaml)
+![PyPI - Version](https://img.shields.io/pypi/v/bytetok)
 ![Python versions](https://img.shields.io/pypi/pyversions/bytetok?cacheSeconds=300)
 ![License](https://img.shields.io/github/license/VihangaFTW/bytetok)
 
