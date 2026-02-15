@@ -2,7 +2,7 @@
 //!
 //! This implementation applies BPE merges to input token sequences using
 //! a priority queue approach inspired by the training algorithm from:
-//! "Byte Pair Encoding is Suboptimal for Language Model Pretraining"
+//! "A Formal Perspective on Byte-Pair Encoding"
 //! https://aclanthology.org/2023.findings-acl.38.pdf
 //!
 //! The encoder applies merges in the order they were learned during training

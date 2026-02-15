@@ -1,6 +1,6 @@
 //! Core BPE training algorithm (Algorithm 2).
 //!
-//! Optimized implementation from "Byte Pair Encoding is Suboptimal for Language Model Pretraining"
+//! Optimized implementation from "A Formal Perspective on Byte-Pair Encoding"
 //! https://aclanthology.org/2023.findings-acl.38.pdf
 //!
 //! Time complexity: O(N log V) vs O(NV) for naive implementation.

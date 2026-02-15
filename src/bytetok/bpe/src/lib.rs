@@ -1,5 +1,5 @@
 //! Fast BPE (Byte-Pair Encoding) trainer using Algorithm 2
-//! from "Byte Pair Encoding is Suboptimal for Language Model Pretraining"
+//! from "A Formal Perspective on Byte-Pair Encoding"
 //!
 //! This is a PyO3 extension module providing Python bindings.
 
