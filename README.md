@@ -62,7 +62,7 @@ If you want to develop or build from source, you'll need a Rust toolchain ([rust
 
 ```bash
 # clone the repository
-git clone https://github.com/vihanga-malaviarachchi/bytetok.git
+git clone https://github.com/VihangaFTW/bytetok.git
 cd bytetok
 
 # install with uv

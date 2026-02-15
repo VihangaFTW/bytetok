@@ -68,17 +68,26 @@ impl RustBPETrainer {
     ///     num_merges: Number of merge operations to perform.
     ///
     /// Note:
+    ///     This method releases the Python GIL while the Rust training loop runs.
     ///     Training will stop early if no more pairs can be merged.
-    fn train(&mut self, num_merges: usize) {
-        self.trainer.train(num_merges);
+    fn train(&mut self, py: Python<'_>, num_merges: usize) {
+        let trainer = &mut self.trainer;
+        // allow rust code to run without the GIL
+        py.detach(move || {
+            trainer.train(num_merges);
+        })
     }
 
     /// Performs a single merge operation on the most frequent token pair.
     ///
     /// Returns:
     ///     True if a merge was performed, False if no pairs remain to merge.
-    fn merge_step(&mut self) -> bool {
-        self.trainer.merge_step()
+    ///
+    /// Note:
+    ///     This method releases the Python GIL while the merge step runs.
+    fn merge_step(&mut self, py: Python<'_>) -> bool {
+        let trainer = &mut self.trainer;
+        py.detach(move || trainer.merge_step())
     }
 
     /// Returns the current token sequence after all merges.
@@ -156,8 +165,12 @@ impl RustBPEEncoder {
     ///
     /// Returns:
     ///     Encoded token sequence with merges applied.
-    fn encode(&self, tokens: Vec<usize>) -> Vec<usize> {
-        self.encoder.encode(tokens)
+    ///
+    /// Note:
+    ///     This method releases the Python GIL while the Rust encoder executes.
+    fn encode(&self, py: Python<'_>, tokens: Vec<usize>) -> Vec<usize> {
+        let encoder = &self.encoder;
+        py.detach(move || encoder.encode(tokens))
     }
 
     /// Checks if a token pair has a learned merge rule.

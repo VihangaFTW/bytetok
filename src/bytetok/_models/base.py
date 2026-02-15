@@ -2,18 +2,23 @@
 Base tokenizer interface for byte-level tokenization implementations.
 """
 
-from abc import ABC, abstractmethod
-from warnings import deprecated
-from .._bpe import Encoding, Token, TokenPair, Vocabulary, slow_bpe_merge
-from .._sanitise import render_bytes
-from pathlib import Path
-from typing import Final, TYPE_CHECKING
-from ..errors import ModelLoadError
+import os
 import logging
+from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
+from warnings import deprecated
+from typing import Final, TYPE_CHECKING
+from pathlib import Path
+
+from .._sanitise import render_bytes
+from .._bpe import Encoding, Token, TokenPair, Vocabulary, slow_bpe_merge
+from ..parallel import ParallelMode
+from ..errors import ModelLoadError
 
 if TYPE_CHECKING:
     from ..strategy import SpecialTokenStrategy
     from ..bpe import RustBPEEncoder
+
 
 PREFIX: Final[str] = "ByteTok"
 VERSION: Final[str] = "0.1.0"
@@ -54,7 +59,10 @@ class Tokenizer(ABC):
 
     @abstractmethod
     def encode(
-        self, text: str, strategy: "SpecialTokenStrategy | None" = None
+        self,
+        text: str,
+        strategy: "SpecialTokenStrategy | None" = None,
+        num_workers: int | None = None,
     ) -> list[Token]:
         """Encode text into a sequence of tokens."""
         ...
@@ -146,7 +154,7 @@ class Tokenizer(ABC):
             except ValueError:
                 raise ModelLoadError(f"invalid special token count: {n_special_tokens}")
 
-            log.debug(f"loading {n_special_tokens} special tokens...")
+            log.debug(f"loading {n_special_tokens} special tokens")
 
             count = 0
             while count < n_special_tokens:
@@ -174,7 +182,7 @@ class Tokenizer(ABC):
             log.debug(f"{n_special_tokens} special tokens loaded")
 
             # read and load merges
-            log.debug("loading merge tokens...")
+            log.debug("loading merge tokens")
             for line in f:
                 try:
                     # tokens are stored as strings in file
@@ -197,6 +205,29 @@ class Tokenizer(ABC):
         log.info(
             f"model loaded successfully: {len(self.special_toks)} special tokens, {len(self.merges)} merge rules, {len(self.vocab)} total tokens"
         )
+
+    @abstractmethod
+    def encode_batch(
+        self,
+        texts: list[str],
+        strategy: "SpecialTokenStrategy | None" = None,
+        num_workers: int | None = None,
+        parallel_mode: ParallelMode = ParallelMode.AUTO,
+    ) -> list[list[Token]]:
+        """
+        Encode multiple texts into sequences of tokens in batch.
+
+        :param texts: List of text strings to encode.
+        :param strategy: Strategy to handle special tokens in texts.
+        :param num_workers: Thread pool size for parallel encoding.
+        :param parallel_mode: Parallelization strategy - "auto", "batch", "chunk", or "off".
+        :return: List of token sequences, one for each input text.
+        """
+        ...
+
+    def _to_base_tokens(self, chunks: list[str]) -> list[list[Token]]:
+        # turn chunks into base token representations
+        return [list(chunk.encode("utf-8", errors="replace")) for chunk in chunks]
 
     def _build_vocab(self) -> Vocabulary:
         """
@@ -316,15 +347,15 @@ class Tokenizer(ABC):
 
         return tokens
 
-    def _apply_fast_bpe_chunk(self, tokens: list[Token]) -> list[Token]:
+    def _apply_fast_bpe_chunk(self, chunk: list[Token]) -> list[Token]:
         """
         Apply BPE merges using fast Rust implementation.
 
-        :param tokens: List of tokens (initially bytes 0-255).
+        :param chunk: List of tokens (initially bytes 0-255).
         :returns: Compressed token sequence after applying learned merges.
         """
         if not self.merges:
-            return tokens
+            return chunk
 
         # Build or retrieve cached encoder.
         if self._encoder is None:
@@ -342,4 +373,52 @@ class Tokenizer(ABC):
             self._encoder = RustBPEEncoder(merge_history)
 
         # Apply all merges using O(N log N) algorithm.
-        return self._encoder.encode(tokens)
+        return self._encoder.encode(chunk)
+
+    def _apply_fast_bpe_chunks(
+        self,
+        chunks: list[list[Token]],
+        num_workers: int | None = None,
+        min_chunks_for_parallel: int = 8,
+    ) -> list[list[Token]]:
+        """
+        Apply BPE merges to many chunks using fast Rust implementation.
+
+        Uses a serial path for small workloads and a thread pool for larger
+        workloads. Output order matches input chunk order in both paths.
+
+        :param chunks: List of token chunks (each chunk initially bytes 0-255).
+        :param num_workers: Number of worker threads for parallel path.
+        :param min_chunks_for_parallel: Minimum chunk count to enable parallel path.
+        :returns: List of compressed token chunks after applying learned merges.
+        """
+        if not chunks:
+            return []
+
+        # tokenizer hasnt been trained yet
+        if not self.merges:
+            return chunks
+
+        # build an encoder instance once
+        if self._encoder is None:
+            # ensure merge tokens are in ascending order (just in case)
+            # non-dominant cost of O(M log M); a worthy tradeoff for correctness
+            merge_history = sorted(self.merges.items(), key=lambda x: x[1])
+            from bytetok.bpe import RustBPEEncoder
+
+            self._encoder = RustBPEEncoder(merge_history)
+
+        # serial path encoding for small workloads
+        if len(chunks) < min_chunks_for_parallel:
+            return [self._encoder.encode(chunk) for chunk in chunks]
+
+        # parallel path
+        # delegate chunks among worker threads
+        if num_workers is None:
+            workers = os.cpu_count() or 1
+        else:
+            workers = max(1, num_workers)  # "0" interpreted as 1 worker
+        # delegate job of encoding a chunk to a separate worker thread
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            # pool.map() preserves order
+            return list(pool.map(self._encoder.encode, chunks))

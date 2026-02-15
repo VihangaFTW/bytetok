@@ -18,8 +18,8 @@ try:
     from .._bpe_rs import RustBPETrainer, RustBPEEncoder
 except Exception as e:
     raise ImportError(
-        "Rust extension module `bytetok._bpe_rs` is not available. "
-        "This package is Rust-only; build/install the extension (e.g. via maturin)."
+        "rust extension module `bytetok._bpe_rs` is not available "
+        "this package is rust-only; build/install the extension (e.g. via maturin)"
     ) from e
 
 __all__ = ["RustBPETrainer", "RustBPEEncoder"]

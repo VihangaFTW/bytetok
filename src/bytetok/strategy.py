@@ -1,14 +1,17 @@
-"""Special token handling strategies for tokenization."""
+"""Special token handling for tokenization."""
 
-from typing import override
+from typing import Final, Literal, overload, override
 from abc import ABC, abstractmethod
 import logging
 from ._bpe import Token
 
-from .errors import SpecialTokenError
+from .errors import SpecialTokenError, StrategyError
 
 log = logging.getLogger(__name__)
 
+# =========================================================================================
+
+# special token handling strategies
 
 class SpecialTokenStrategy(ABC):
     """Base strategy for handling special tokens during encoding."""
@@ -24,7 +27,7 @@ class AllowAllStrategy(SpecialTokenStrategy):
     @override
     def handle(self, text: str, special_toks: dict[str, Token]) -> dict[str, Token]:
         if not special_toks:
-            log.warning("no special tokens registered..")
+            log.warning("no special tokens registered")
         return special_toks
 
 
@@ -64,3 +67,61 @@ class AllowCustomStrategy(SpecialTokenStrategy):
         return {
             seq: tok for seq, tok in special_toks.items() if seq in self.allowed_subset
         }
+
+
+StrategyName = Literal["all", "none", "none-raise", "custom"]
+
+_SPECIAL_TOKEN_STRATEGIES: Final[dict[str, type[SpecialTokenStrategy]]] = {
+    "all": AllowAllStrategy,
+    "none": AllowNoneStrategy,
+    "none-raise": AllowNoneRaiseStrategy,
+    "custom": AllowCustomStrategy,
+}
+
+
+def list_strategies() -> list[str]:
+    """Return available special token strategy names."""
+    return list(_SPECIAL_TOKEN_STRATEGIES.keys())
+
+
+@overload
+def get_strategy(
+    name: Literal["all", "none", "none-raise"],
+) -> SpecialTokenStrategy: ...
+
+
+@overload
+def get_strategy(
+    name: Literal["custom"], allowed_subset: set[str]
+) -> AllowCustomStrategy: ...
+
+
+def get_strategy(
+    name: StrategyName = "none-raise", allowed_subset: set[str] | None = None
+) -> SpecialTokenStrategy:
+    """Create a special token handling strategy."""
+    if name not in _SPECIAL_TOKEN_STRATEGIES:
+        raise StrategyError(
+            "unknown strategy name",
+            invalid_name=name,
+            available_strats=list(_SPECIAL_TOKEN_STRATEGIES.keys()),
+        )
+
+    if name == "custom":
+        if allowed_subset is None:
+            raise StrategyError("allowed_subset is required for custom strategy")
+        return AllowCustomStrategy(allowed_subset)
+
+    return _SPECIAL_TOKEN_STRATEGIES[name]()
+
+
+__all__ = [
+    "StrategyName",
+    "SpecialTokenStrategy",
+    "AllowAllStrategy",
+    "AllowNoneStrategy",
+    "AllowNoneRaiseStrategy",
+    "AllowCustomStrategy",
+    "list_strategies",
+    "get_strategy",
+]

@@ -1,6 +1,20 @@
 from enum import Enum
+from typing import Literal
 
 from .errors import PatternError
+
+Pattern = Literal[
+    "gpt2",
+    "gpt4",
+    "gpt4o",
+    "llama3",
+    "qwen2",
+    "deepseek-coder",
+    "deepseek-llm",
+    "starcoder",
+    "falcon",
+    "bloom",
+]
 
 
 class TokenPattern(str, Enum):
@@ -106,6 +120,19 @@ class TokenPattern(str, Enum):
             return cls[name.upper().replace("-", "_")].value
         except KeyError:
             raise PatternError(
-                f"Unknown pattern: {name!r}. "
-                f"Valid patterns: {', '.join(pat.name for pat in cls)}"
+                f"unknown pattern: {name!r} "
+                f"valid patterns: {', '.join(pat.name for pat in cls)}"
             )
+
+
+def list_patterns() -> list[str]:
+    """Return names of all available built-in tokenization patterns."""
+    return [pat.name for pat in TokenPattern]
+
+
+def get_pattern(name: Pattern) -> str:
+    """Get a built-in pattern string by name."""
+    return TokenPattern.get(name)
+
+
+__all__ = ["Pattern", "TokenPattern", "list_patterns", "get_pattern"]

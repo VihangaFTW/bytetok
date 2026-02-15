@@ -98,7 +98,7 @@ class BasicTokenizer(Tokenizer):
         if len(merge_history) < n_merges:
             log.warning(
                 f"no more byte pairs to merge after {len(merge_history)} merges "
-                f"(requested {n_merges}). stopping early."
+                f"(requested {n_merges}) stopping early"
             )
 
         self.merges = merges  # used for encoding text -> tokens

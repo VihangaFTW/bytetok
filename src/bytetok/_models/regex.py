@@ -1,12 +1,21 @@
 """Regex-based byte-level tokenizer implementation."""
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import override
 
-from ..errors import PatternError, SpecialTokenError, TrainingError, VocabularyError
+import os
+
+from ..errors import (
+    PatternError,
+    SpecialTokenError,
+    TokenizationError,
+    TrainingError,
+    VocabularyError,
+)
 from ..pattern import TokenPattern
 from ..strategy import SpecialTokenStrategy
 
-from .base import Tokenizer
+from .base import Tokenizer, ParallelMode
 from .._decorators import measure_time
 from .._bpe import (
     Encoding,
@@ -65,22 +74,40 @@ class RegexTokenizer(Tokenizer):
 
     @override
     def encode(
-        self, text: str, strategy: SpecialTokenStrategy | None = None
+        self,
+        text: str,
+        strategy: SpecialTokenStrategy | None = None,
+        num_workers: int | None = None,
     ) -> list[Token]:
         """
         Encode text into a sequence of tokens.
 
         :param text: Text to encode.
         :param strategy: Strategy to handle special tokens in `text`.
+        :param num_workers: Thread pool size for parallel encoding.
         """
 
         # no strategy is inferred as no special token handling
         if strategy is None:
-            return self._apply_bpe_text(text)
+            # split text into chunks as defined by pattern
+            chunks = [m.group(0) for m in re.finditer(self.compiled_pat, text)]
+
+            # turn chunks into base token representations
+            byte_chunks = self._to_base_tokens(chunks)
+
+            tokens: list[Token] = []
+
+            encoded_chunks = self._apply_fast_bpe_chunks(
+                byte_chunks, num_workers=num_workers
+            )
+
+            for chunk_toks in encoded_chunks:
+                tokens.extend(chunk_toks)
+
+            return tokens
 
         # retrieve special tokens as defined by chosen strategy
         special_toks = strategy.handle(text, self.special_toks)
-
         # escape regex metachars like "+" in special tokens to avoid unwanted effects
         esc_special_toks = [re.escape(seq) for seq in special_toks]
         # The capturing group parentheses make re.split() include
@@ -89,19 +116,90 @@ class RegexTokenizer(Tokenizer):
         # otherwise we lose the special tokens after split (leads to lossy decoding)
         special_pat = "(" + "|".join(esc_special_toks) + ")"
         chunks = re.split(special_pat, text)
-        tokens = []
+
+        # filter special chunks and normal chunks that require bpe
+        # so that all the normal chunks can be processed in parallel
+
+        # running accumulation of full encoding (normal + special chunks)
+        # None entries will be replaced by bpe encodings later
+        out_parts: list[list[Token] | None] = []
+
+        # track normal chunks that required bpe encoding
+        normal_chunks: list[str] = []
+        # track indices in out_parts where normal chunks
+        # should be inserted after encoding
+        normal_positions: list[int] = []
+
         for chunk in chunks:
             if chunk in special_toks:
-                # special token sequence already have a unique token id
-                tokens.append(special_toks[chunk])
+                # special tokens have pre-determined encodings
+                out_parts.append([special_toks[chunk]])
             else:
-                tokens.extend(
-                    self._apply_fast_bpe_chunk(
-                        list(chunk.encode("utf-8", errors="replace"))
+                # normal bpe chunk requires bpe encoding later
+                out_parts.append(None)
+                normal_chunks.append(chunk)
+                normal_positions.append(len(out_parts) - 1)
+
+        # encode all normal chunks in parallel
+        base_encodings = self._to_base_tokens(normal_chunks)
+        encoded_normals = self._apply_fast_bpe_chunks(
+            base_encodings, num_workers=num_workers
+        )
+        # insert encodings at correct positions in accumulator
+        try:
+            for pos, encoding in zip(normal_positions, encoded_normals, strict=True):
+                out_parts[pos] = encoding
+        except ValueError as e:
+            raise TokenizationError("internal error, kindly report issue") from e
+
+        tokens = []
+        # flatten parts to get full text encoding
+        for part in out_parts:
+            if part is not None:
+                tokens.extend(part)
+
+        return tokens
+
+    @override
+    def encode_batch(
+        self,
+        texts: list[str],
+        strategy: "SpecialTokenStrategy | None" = None,
+        num_workers: int | None = None,
+        parallel_mode: ParallelMode = ParallelMode.AUTO,
+    ) -> list[list[Token]]:
+        # delegate chunks among worker threads
+        if num_workers is None:
+            workers = os.cpu_count() or 1
+        else:
+            workers = max(1, num_workers)  # "0" interpreted as 1 worker
+
+        def process_batch():
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                return list(
+                    pool.map(
+                        lambda text: self.encode(
+                            text, strategy=strategy, num_workers=1
+                        ),
+                        texts,
                     )
                 )
 
-        return tokens
+        match parallel_mode:
+            case ParallelMode.OFF:
+                return [self.encode(text, strategy, 1) for text in texts]
+            case ParallelMode.CHUNK:
+                return [self.encode(text, strategy, workers) for text in texts]
+            case ParallelMode.BATCH:
+                return process_batch()
+            case ParallelMode.AUTO:
+                # single text sequence parallelized on chunk level
+                if len(texts) == 1:
+                    return [
+                        self.encode(texts[0], strategy=strategy, num_workers=workers)
+                    ]
+                # multiple texts processed as parallel batches
+                return process_batch()
 
     @override
     def decode(self, tokens: list[Token]) -> str:
@@ -149,22 +247,6 @@ class RegexTokenizer(Tokenizer):
         for seq, tok in self.special_toks.items():
             self.vocab[tok] = seq.encode("utf-8")
 
-    def _apply_bpe_text(self, text: str) -> list[Token]:
-        # split text into chunks as defined by pattern
-        chunks = [m.group(0) for m in re.finditer(self.compiled_pat, text)]
-
-        tokens: list[Token] = []
-        # compress each text chunk into tokens via bpe
-        for chunk in chunks:
-            # aggregate local tokens to global compressed token sequence
-            tokens.extend(
-                self._apply_fast_bpe_chunk(
-                    list(chunk.encode("utf-8", errors="replace"))
-                )
-            )
-
-        return tokens
-
     def _train_rust(self, tokens: list[int], n_merges: int, verbose: bool) -> None:
         """Train using fast Rust implementation."""
 
@@ -194,7 +276,7 @@ class RegexTokenizer(Tokenizer):
         if len(merge_history) < n_merges:
             log.warning(
                 f"no more byte pairs to merge after {len(merge_history)} merges "
-                f"(requested {n_merges}). stopping early."
+                f"(requested {n_merges}) stopping early"
             )
 
         self.merges: Encoding = merges
