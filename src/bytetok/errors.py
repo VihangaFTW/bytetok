@@ -30,6 +30,7 @@ class TokenizationError(ByteTokError):
         position: int | None = None,
         input_text: str | None = None,
     ) -> None:
+        """Capture optional context about where tokenization failed."""
         super().__init__(message)
         self.position = position
         self.input_text = input_text
@@ -78,6 +79,7 @@ class ModelLoadError(ByteTokError):
         version_mismatch: tuple[str, list[str]] | None = None,
         type_mismatch: tuple[str, list[str]] | None = None,
     ) -> None:
+        """Attach model path and mismatch details to the error message."""
         extra = " "
         if model_path:
             extra += f"(path: {model_path}) "

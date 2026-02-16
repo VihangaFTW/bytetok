@@ -1,16 +1,20 @@
 [project]
 name = "bytetok"
-version = "0.1.2"
+version = "0.2.0"
 description = "A fast, modular and light-weight BPE tokenizer for NLP research and prototyping."
 readme = "README.md"
 license = { text = "MIT" }
 classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 authors = [{ name = "Vihanga Malaviarachchi" }]
 requires-python = ">=3.13"
-dependencies = ["regex"]
+dependencies = [
+    "datasets>=4.5.0",
+    "regex",
+]
 
 keywords = ["bpe", "tokenizer", "nlp", "byte-pair-encoding"]
 

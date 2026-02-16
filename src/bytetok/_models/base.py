@@ -5,7 +5,6 @@ Base tokenizer interface for byte-level tokenization implementations.
 import os
 import logging
 from abc import ABC, abstractmethod
-from concurrent.futures import ThreadPoolExecutor
 from warnings import deprecated
 from typing import Final, TYPE_CHECKING
 from pathlib import Path
@@ -226,6 +225,7 @@ class Tokenizer(ABC):
         ...
 
     def _to_base_tokens(self, chunks: list[str]) -> list[list[Token]]:
+        """Convert text chunks into UTF-8 byte token chunks."""
         # turn chunks into base token representations
         return [list(chunk.encode("utf-8", errors="replace")) for chunk in chunks]
 
@@ -408,17 +408,25 @@ class Tokenizer(ABC):
 
             self._encoder = RustBPEEncoder(merge_history)
 
-        # serial path encoding for small workloads
-        if len(chunks) < min_chunks_for_parallel:
-            return [self._encoder.encode(chunk) for chunk in chunks]
-
-        # parallel path
-        # delegate chunks among worker threads
         if num_workers is None:
             workers = os.cpu_count() or 1
         else:
             workers = max(1, num_workers)  # "0" interpreted as 1 worker
-        # delegate job of encoding a chunk to a separate worker thread
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            # pool.map() preserves order
-            return list(pool.map(self._encoder.encode, chunks))
+
+        total_tokens = sum(len(chunk) for chunk in chunks)
+        avg_chunk_tokens = total_tokens / len(chunks)
+
+        # serial path for tiny workloads or explicit single-worker mode
+        if (
+            workers == 1
+            or len(chunks) < min_chunks_for_parallel
+            or total_tokens < 32_768
+            or avg_chunk_tokens < 8
+        ):
+            return [self._encoder.encode(chunk) for chunk in chunks]
+
+        # parallel path delegates multi-chunk encoding to rust
+        # to avoids python side thread scheduling overhead
+        if self._encoder is None:
+            return chunks
+        return self._encoder.encode_many(chunks)

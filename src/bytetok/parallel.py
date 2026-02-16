@@ -14,6 +14,8 @@ ParallelStrategy = Literal["auto", "batch", "chunk", "off"]
 
 
 class ParallelMode(str, Enum):
+    """Named parallelization modes for batch encoding."""
+
     AUTO = "auto"
     BATCH = "batch"
     CHUNK = "chunk"

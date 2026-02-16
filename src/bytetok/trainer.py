@@ -25,64 +25,46 @@ class BPETrainingResult:
     n_merges_completed: int
 
 
-class BPETrainer:
+def train_bpe(
+    tokens: list[Token], n_merges: int, verbose: bool = False
+) -> BPETrainingResult:
     """
-    BPE trainer that learns merge operations from token sequences.
+    Train BPE on a sequence of tokens.
 
     Trained using a fast Rust implementation.
 
-    Example:
-       >>> tokens = [72, 101, 108, 108, 111]  # "Hello" as bytes
-       >>> trainer = BPETrainer()
-       >>> result = trainer.train(tokens, n_merges=10)
-       >>> print(f"Learned {result.n_merges_completed} merges")
-       >>> print(f"Vocabulary size: {len(result.vocab)}")
+    :param tokens: Sequence of token IDs (typically bytes 0-255).
+    :param n_merges: Number of merge operations to learn.
+    :param verbose: Whether to log merge operations.
+    :return: Training results containing merges and vocabulary.
     """
+    if len(tokens) == 0:
+        raise TrainingError("empty token sequence, no training performed")
 
-    def __init__(self) -> None:
-        self.trainer: RustBPETrainer | None = None
+    trainer = RustBPETrainer(tokens, 256)
+    trainer.train(n_merges)
 
-    def train(
-        self, tokens: list[Token], n_merges: int, verbose: bool = False
-    ) -> BPETrainingResult:
-        """
-        Train BPE on a sequence of tokens.
+    merge_history = trainer.get_merge_history()
 
-        :param tokens: Sequence of token IDs (typically bytes 0-255).
-        :param n_merges: Number of merge operations to learn.
-        :param verbose: Whether to log merge operations.
-        :return: Training results containing merges and vocabulary.
-        """
-        if len(tokens) < 10:
-            raise TrainingError("text should have at least 10 characters")
+    merges: Encoding = {}
+    vocab: Vocabulary = {tok: bytes([tok]) for tok in range(256)}
 
-        # Initialize Rust trainer.
-        self.trainer = RustBPETrainer(tokens, 256)
+    for (tok_a, tok_b), new_tok in merge_history:
+        pair: TokenPair = (tok_a, tok_b)
+        merges[pair] = new_tok
+        vocab[new_tok] = vocab[tok_a] + vocab[tok_b]
 
-        # Train for requested number of merges.
-        self.trainer.train(n_merges)
+        if verbose:
+            log.info(
+                "merge %d/%d: %s -> %d",
+                len(merges),
+                n_merges,
+                pair,
+                new_tok,
+            )
 
-        merge_history = self.trainer.get_merge_history()
-
-        merges: Encoding = {}
-        vocab: Vocabulary = {tok: bytes([tok]) for tok in range(256)}
-
-        for (tok_a, tok_b), new_tok in merge_history:
-            pair: TokenPair = (tok_a, tok_b)
-            merges[pair] = new_tok
-            vocab[new_tok] = vocab[tok_a] + vocab[tok_b]
-
-            if verbose:
-                log.info(
-                    "merge %d/%d: %s -> %d",
-                    len(merges),
-                    n_merges,
-                    pair,
-                    new_tok,
-                )
-
-        return BPETrainingResult(
-            vocab=vocab,
-            merges=merges,
-            n_merges_completed=len(merge_history),
-        )
+    return BPETrainingResult(
+        vocab=vocab,
+        merges=merges,
+        n_merges_completed=len(merge_history),
+    )

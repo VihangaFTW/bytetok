@@ -18,11 +18,15 @@ _TOKENIZER_REGISTRY: Final[dict[str, type[Tokenizer]]] = {
     "basic": BasicTokenizer,
 }
 @overload
-def get_tokenizer(pattern: Pattern) -> Tokenizer: ...
+def get_tokenizer(pattern: Pattern) -> Tokenizer:
+    """Create a tokenizer from a named built-in pattern."""
+    ...
 
 
 @overload
-def get_tokenizer(*, custom_pattern: str) -> Tokenizer: ...
+def get_tokenizer(*, custom_pattern: str) -> Tokenizer:
+    """Create a tokenizer from a custom regex pattern."""
+    ...
 
 
 def get_tokenizer(

@@ -75,3 +75,7 @@ temp/
 # training outputs
 *.model
 *.vocab
+
+
+# benchmarking script
+test_training.py

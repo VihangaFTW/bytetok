@@ -1,3 +1,5 @@
+"""Reusable decorators for training and tokenizer utilities."""
+
 import time
 import functools
 import logging
@@ -7,10 +9,11 @@ log = logging.getLogger(__name__)
 
 
 def measure_time(func: Callable) -> Callable:
-    """Decorator to measure and log function execution time."""
+    """Log execution time for the wrapped callable."""
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
+        """Call ``func`` and always log elapsed time."""
         start = time.perf_counter()
         try:
             # call decorated func with its normal arguments

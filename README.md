@@ -32,13 +32,15 @@ As my dataset requirements grew, the naive BPE implementation started struggling
 
 Benchmarks were run on Linux x86_64 with an Intel Core i7-12700H (20 cores @ 4.70 GHz) and 32GB DDR5 RAM.
 
-| Dataset                                                                                     | Corpus Size            | Vocab Size | Training Time      | Encoding Throughput           | Decoding Throughput | Compression Ratio | Size Reduction |
-| ------------------------------------------------------------------------------------------- | ---------------------- | ---------- | ------------------ | ----------------------------- | ------------------- | ----------------- | -------------- |
-| [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci-Fi-Books-gutenberg) | 88.85 MB (93M chars)   | 25,000     | 198s (~3.3 mins)   | 2.99M chars/sec (2.85 MB/sec) | 19.2M tokens/sec    | 1.43x             | 30.3%          |
-| [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci-Fi-Books-gutenberg) | 216.96 MB (227M chars) | 10,000     | 523s (~8.7 mins)   | 2.86M chars/sec (2.73 MB/sec) | 17.1M tokens/sec    | 1.60x             | 37.7%          |
-| [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci-Fi-Books-gutenberg) | 216.96 MB (227M chars) | 25,000     | 579s (~9.65 mins)  | 2.85M chars/sec (2.72 MB/sec) | 17.0M tokens/sec    | 1.68x             | 40.6%          |
-| [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci-Fi-Books-gutenberg) | 216.96 MB (227M chars) | 50,000     | 640s (~10.7 mins)  | 2.76M chars/sec (2.63 MB/sec) | 16.4M tokens/sec    | 1.75x             | 42.7%          |
-| [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci-Fi-Books-gutenberg) | 326.96 MB (343M chars) | 50,000     | 1048s (~17.5 mins) | 2.82M chars/sec (2.69 MB/sec) | 7.02M tokens/sec    | 1.44x             | 30.7%          |
+Dataset: [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci-Fi-Books-gutenberg).
+
+| Corpus Size            | Vocab Size | Training Time      | Encoding Throughput           | Decoding Throughput | Compression Ratio | Size Reduction |
+| ---------------------- | ---------- | ------------------ | ----------------------------- | ------------------- | ----------------- | -------------- |
+| 88.85 MB              | 25,000     | 3.3 mins           | 2.85 MB/sec                   | 19.2M tokens/sec    | 1.43x             | 30.3%          |
+| 216.96 MB             | 10,000     | 8.7 mins           | 2.73 MB/sec                   | 17.1M tokens/sec    | 1.60x             | 37.7%          |
+| 216.96 MB             | 25,000     | 9.65 mins          | 2.72 MB/sec                   | 17.0M tokens/sec    | 1.68x             | 40.6%          |
+| 216.96 MB             | 50,000     | 10.7 mins          | 2.63 MB/sec                   | 16.4M tokens/sec    | 1.75x             | 42.7%          |
+| 326.96 MB             | 50,000     | 17.5 mins          | 2.69 MB/sec                   | 7.02M tokens/sec    | 1.44x             | 30.7%          |
 
 ## Requirements
 
@@ -69,8 +71,8 @@ cd bytetok
 uv sync
 
 # or build with maturin
-pip install maturin
-maturin develop
+uv sync --group dev
+uv run maturin develop
 ```
 
 ## Quick Start

@@ -4,12 +4,12 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import override
 
 import os
+from math import ceil
 
 from ..errors import (
     PatternError,
     SpecialTokenError,
     TokenizationError,
-    TrainingError,
     VocabularyError,
 )
 from ..pattern import TokenPattern
@@ -18,11 +18,9 @@ from ..strategy import SpecialTokenStrategy
 from .base import Tokenizer, ParallelMode
 from .._decorators import measure_time
 from .._bpe import (
-    Encoding,
     Token,
-    Vocabulary,
 )
-from ..bpe import RustBPETrainer
+from ..trainer import train_bpe
 
 import regex as re
 import logging
@@ -37,6 +35,7 @@ class RegexTokenizer(Tokenizer):
     TOKENIZER_TYPE = "regex"
 
     def __init__(self, pattern: str | None = None) -> None:
+        """Initialize tokenizer with a provided or default split pattern."""
         super().__init__()
         if pattern is None:
             self.pat = TokenPattern.get("gpt4o")
@@ -51,7 +50,18 @@ class RegexTokenizer(Tokenizer):
     def train(
         self, text: str | list[str], vocab_size: int, verbose: bool = False
     ) -> None:
-        """Train tokenizer by learning byte pair merges on regex-split chunks."""
+        """
+        Train the tokenizer on regex-split text chunks.
+
+        Input text is first segmented by the configured regex pattern, then
+        flattened into UTF-8 byte tokens and used for BPE merge learning.
+
+        :param text: Training text as a single string or list of strings.
+        :param vocab_size: Target vocabulary size including the base 256 bytes.
+        :param verbose: Log each learned merge when ``True``.
+        :raises VocabularyError: If ``vocab_size`` is less than or equal to 256.
+        :raises TrainingError: If no trainable byte tokens are produced.
+        """
         if vocab_size <= 256:
             raise VocabularyError(
                 "vocab size must be greater than 256", vocab_size=vocab_size
@@ -70,7 +80,18 @@ class RegexTokenizer(Tokenizer):
 
         n_merges = vocab_size - 256
 
-        self._train_rust(tokens, n_merges, verbose)
+        result = train_bpe(tokens, n_merges, verbose=verbose)
+
+        if result.n_merges_completed < n_merges:
+            log.warning(
+                f"no more byte pairs to merge after {result.n_merges_completed} merges "
+                f"(requested {n_merges}) stopping early"
+            )
+
+        self.merges = result.merges
+        self.vocab = result.vocab
+        # invalidate encoder cache since merges changed
+        self._encoder = None
 
     @override
     def encode(
@@ -82,9 +103,15 @@ class RegexTokenizer(Tokenizer):
         """
         Encode text into a sequence of tokens.
 
+        If ``strategy`` is ``None``, the tokenizer only applies regex chunking
+        and BPE. When a strategy is provided, matched special tokens are kept as
+        atomic tokens while non-special spans are encoded with BPE.
+
         :param text: Text to encode.
-        :param strategy: Strategy to handle special tokens in `text`.
-        :param num_workers: Thread pool size for parallel encoding.
+        :param strategy: Strategy used to select allowed special tokens.
+        :param num_workers: Worker count for chunk-level BPE application.
+        :returns: Encoded token sequence.
+        :raises TokenizationError: If internal chunk assembly fails unexpectedly.
         """
 
         # no strategy is inferred as no special token handling
@@ -168,22 +195,45 @@ class RegexTokenizer(Tokenizer):
         num_workers: int | None = None,
         parallel_mode: ParallelMode = ParallelMode.AUTO,
     ) -> list[list[Token]]:
+        """
+        Encode many texts using the requested parallelization mode.
+
+        ``off`` encodes texts serially. ``chunk`` encodes each text using
+        chunk-level parallelism. ``batch`` runs multiple full-text encodes in
+        parallel. ``auto`` chooses chunk mode for a single input text and batch
+        mode for multiple texts.
+
+        :param texts: Text inputs to encode.
+        :param strategy: Optional special token handling strategy.
+        :param num_workers: Worker count for chunk or batch parallelism.
+        :param parallel_mode: Parallelization policy.
+        :returns: Encoded token sequences in input order.
+        """
         # delegate chunks among worker threads
         if num_workers is None:
             workers = os.cpu_count() or 1
         else:
             workers = max(1, num_workers)  # "0" interpreted as 1 worker
 
-        def process_batch():
+        def process_batch() -> list[list[Token]]:
+            """Encode grouped text batches in parallel using single-worker chunk encoding."""
+            if workers == 1 or len(texts) <= 1:
+                return [self.encode(text, strategy=strategy, num_workers=1) for text in texts]
+
+            # group texts to reduce task-scheduling overhead when the input
+            # contains many documents
+            target_tasks = min(len(texts), workers * 2)
+            group_size = max(1, ceil(len(texts) / target_tasks))
+            text_groups = [
+                texts[idx : idx + group_size] for idx in range(0, len(texts), group_size)
+            ]
+
+            def encode_group(group: list[str]) -> list[list[Token]]:
+                return [self.encode(text, strategy=strategy, num_workers=1) for text in group]
+
             with ThreadPoolExecutor(max_workers=workers) as pool:
-                return list(
-                    pool.map(
-                        lambda text: self.encode(
-                            text, strategy=strategy, num_workers=1
-                        ),
-                        texts,
-                    )
-                )
+                encoded_groups = list(pool.map(encode_group, text_groups))
+            return [encoded for group in encoded_groups for encoded in group]
 
         match parallel_mode:
             case ParallelMode.OFF:
@@ -198,12 +248,29 @@ class RegexTokenizer(Tokenizer):
                     return [
                         self.encode(texts[0], strategy=strategy, num_workers=workers)
                     ]
+                # many short docs often regress in threaded batch mode due to
+                # python-side scheduling and preprocessing overhead
+                total_chars = sum(len(text) for text in texts)
+                avg_chars = total_chars / len(texts)
+                if total_chars < 2_000_000 or (
+                    len(texts) >= workers * 2 and avg_chars < 40_000
+                ):
+                    return [self.encode(text, strategy, 1) for text in texts]
                 # multiple texts processed as parallel batches
                 return process_batch()
 
     @override
     def decode(self, tokens: list[Token]) -> str:
-        """Decode a sequence of tokens back into text."""
+        """
+        Decode tokens into text, including registered special tokens.
+
+        Tokens are resolved first from the learned vocabulary and then from the
+        inverted special-token mapping.
+
+        :param tokens: Token sequence to decode.
+        :returns: Decoded text where invalid UTF-8 is replaced.
+        :raises VocabularyError: If any token is unknown to both mappings.
+        """
         txt_bytes = []
         for tok in tokens:
             if tok in self.vocab:
@@ -246,44 +313,6 @@ class RegexTokenizer(Tokenizer):
         # rebuild vocab to include special tokens for decoding
         for seq, tok in self.special_toks.items():
             self.vocab[tok] = seq.encode("utf-8")
-
-    def _train_rust(self, tokens: list[int], n_merges: int, verbose: bool) -> None:
-        """Train using fast Rust implementation."""
-
-        if len(tokens) == 0:
-            raise TrainingError("empty token sequence, no training performed")
-
-        trainer = RustBPETrainer(tokens, 256)
-
-        # train for n_merges
-        trainer.train(n_merges)
-
-        # get merge history
-        merge_history = trainer.get_merge_history()
-
-        # build merges dictionary and vocabulary
-        merges = {}
-        vocab = {tok: bytes([tok]) for tok in range(256)}
-
-        for (tok_a, tok_b), new_tok in merge_history:
-            pair = (tok_a, tok_b)
-            merges[pair] = new_tok
-            vocab[new_tok] = vocab[tok_a] + vocab[tok_b]
-
-            if verbose:
-                log.info(f"merge {len(merges)}/{n_merges}: {pair} -> {new_tok}")
-
-        if len(merge_history) < n_merges:
-            log.warning(
-                f"no more byte pairs to merge after {len(merge_history)} merges "
-                f"(requested {n_merges}) stopping early"
-            )
-
-        self.merges: Encoding = merges
-        self.vocab: Vocabulary = vocab
-        # invalidate encoder cache since merges changed
-        self._encoder = None
-
 
 def _compile_pattern(pattern: str) -> re.Pattern:
     """

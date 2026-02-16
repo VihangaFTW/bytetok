@@ -1,6 +1,6 @@
 [package]
 name = "bpe"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 
 [lib]
@@ -8,4 +8,6 @@ name = "_bpe_rs"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+fancy-regex = "0.17.0"
 pyo3 = { version = "0.28.0", features = ["extension-module", "abi3-py312"] }
+rayon = "1.11.0"

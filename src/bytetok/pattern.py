@@ -1,3 +1,5 @@
+"""Built-in regex pattern definitions for supported model families."""
+
 from enum import Enum
 from typing import Literal
 
