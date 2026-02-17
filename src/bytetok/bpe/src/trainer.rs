@@ -268,7 +268,7 @@ impl BPETrainer {
     /// # Returns
     ///
     /// A vector of tuples `((left_token, right_token), merged_token)` in the order
-    /// they were performed. This history is used by the encoder to apply merges in
+    /// they were performed. This history is used by the converter to apply merges in
     /// the correct order.
     pub(crate) fn get_merge_history(&self) -> Vec<((Token, Token), Token)> {
         self.merge_history.clone()

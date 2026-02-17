@@ -5,7 +5,7 @@ import logging
 
 from bytetok.errors import TrainingError
 
-from ._bpe import (
+from .types import (
     Token,
     TokenPair,
     Encoding,

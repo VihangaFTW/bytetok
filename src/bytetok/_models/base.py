@@ -5,18 +5,17 @@ Base tokenizer interface for byte-level tokenization implementations.
 import os
 import logging
 from abc import ABC, abstractmethod
-from warnings import deprecated
 from typing import Final, TYPE_CHECKING
 from pathlib import Path
 
 from .._sanitise import render_bytes
-from .._bpe import Encoding, Token, TokenPair, Vocabulary, slow_bpe_merge
+from ..types import Encoding, Token, Vocabulary
 from ..parallel import ParallelMode
 from ..errors import ModelLoadError
 
 if TYPE_CHECKING:
     from ..strategy import SpecialTokenStrategy
-    from ..bpe import RustBPEEncoder
+    from ..bpe import RustBPEConverter, RustBPETokenizer
 
 
 PREFIX: Final[str] = "ByteTok"
@@ -46,8 +45,10 @@ class Tokenizer(ABC):
         self.special_toks: dict[str, Token] = {}
         # tokens -> bytes
         self.vocab: Vocabulary = self._build_vocab()
-        # cached Rust encoder for fast BPE
-        self._encoder: "RustBPEEncoder | None" = None
+        # cached Rust converter for fast BPE.
+        self._converter: "RustBPEConverter | None" = None
+        # cached Rust tokenizer for full encode/decode pipeline
+        self._tokenizer: "RustBPETokenizer | None" = None
 
     @abstractmethod
     def train(
@@ -198,8 +199,9 @@ class Tokenizer(ABC):
         self.special_toks = special_toks
         self.merges = merges
         self.vocab = self._build_vocab()
-        # invalidate encoder cache since merges changed
-        self._encoder = None
+        # Invalidate Rust caches since model state changed.
+        self._converter = None
+        self._tokenizer = None
 
         log.info(
             f"model loaded successfully: {len(self.special_toks)} special tokens, {len(self.merges)} merge rules, {len(self.vocab)} total tokens"
@@ -316,36 +318,33 @@ class Tokenizer(ABC):
                     # one of base 256 tokens: no merging
                     f.write(f"[{tok}] {subword}\n")
 
-    @deprecated(
-        "Reference implementation for documentation only. Use `_apply_fast_bpe_chunk` for production."
-    )
-    def _apply_slow_bpe_chunk(self, tokens: list[Token]) -> list[Token]:
-        """
-        Apply BPE merges to a token sequence.
+    def _merge_history(self) -> list[tuple[tuple[int, int], int]]:
+        """Return merge history sorted by merge token id."""
+        return sorted(self.merges.items(), key=lambda x: x[1])
 
-        :param tokens: List of tokens (initially bytes 0-255).
-        :returns: Compressed token sequence after applying learned merges.
-        """
-        # loop text compression using BPE algorithm.
-        while len(tokens) >= 2:
-            # get all unique bigram pairs.
-            # we dont need to count frequencies to find min token.
-            # see: https://github.com/karpathy/minbpe/issues/87#issuecomment-2273349030
-            bigrams = set(zip(tokens, tokens[1:]))
-            # retrieve the byte pair with the lowest merge index.
-            # because higher index tokens might depend on lower index merged tokens.
-            # use dict.get() to avoid double lookup (membership check + retrieval).
-            pair: TokenPair = min(
-                bigrams,
-                key=lambda bp: self.merges.get(bp, float("inf")),
+    def _get_rust_converter(self) -> "RustBPEConverter | None":
+        """Build or return cached RustBPEConverter."""
+        if not self.merges:
+            return None
+        if self._converter is None:
+            from bytetok.bpe import RustBPEConverter
+
+            self._converter = RustBPEConverter(self._merge_history())
+        return self._converter
+
+    def _get_rust_tokenizer(self, pattern: str | None = None) -> "RustBPETokenizer":
+        """Build or return cached RustBPETokenizer."""
+        if self._tokenizer is None:
+            from bytetok.bpe import RustBPETokenizer
+
+            effective_pattern = pattern if pattern is not None else (self.pat or r".+")
+            special_tokens = list(self.special_toks.items())
+            self._tokenizer = RustBPETokenizer(
+                self._merge_history(),
+                effective_pattern,
+                special_tokens,
             )
-            # no pair to merge.
-            if pair not in self.merges:
-                break
-            # merge target pair.
-            tokens = slow_bpe_merge(tokens, pair, self.merges[pair])
-
-        return tokens
+        return self._tokenizer
 
     def _apply_fast_bpe_chunk(self, chunk: list[Token]) -> list[Token]:
         """
@@ -356,24 +355,11 @@ class Tokenizer(ABC):
         """
         if not self.merges:
             return chunk
-
-        # Build or retrieve cached encoder.
-        if self._encoder is None:
-            # Build merge history from dict.
-            # Note: self.merges dict preserves insertion order (Python 3.7+),
-            # but we sort by token ID to handle cases where order may not be
-            # preserved (e.g., loading from files, manual construction).
-            # Token IDs are sequential (256, 257, ...) representing merge order.
-            # This sorting is O(M log M) but only happens once (cached).
-            merge_history = sorted(self.merges.items(), key=lambda x: x[1])
-
-            # Create Rust encoder.
-            from bytetok.bpe import RustBPEEncoder
-
-            self._encoder = RustBPEEncoder(merge_history)
-
+        converter = self._get_rust_converter()
+        if converter is None:
+            return chunk
         # Apply all merges using O(N log N) algorithm.
-        return self._encoder.encode(chunk)
+        return converter.encode(chunk)
 
     def _apply_fast_bpe_chunks(
         self,
@@ -384,8 +370,8 @@ class Tokenizer(ABC):
         """
         Apply BPE merges to many chunks using fast Rust implementation.
 
-        Uses a serial path for small workloads and a thread pool for larger
-        workloads. Output order matches input chunk order in both paths.
+        Uses a serial path for small workloads and Rust-side parallel encoding
+        for larger workloads. Output order matches input chunk order in both paths.
 
         :param chunks: List of token chunks (each chunk initially bytes 0-255).
         :param num_workers: Number of worker threads for parallel path.
@@ -399,14 +385,10 @@ class Tokenizer(ABC):
         if not self.merges:
             return chunks
 
-        # build an encoder instance once
-        if self._encoder is None:
-            # ensure merge tokens are in ascending order (just in case)
-            # non-dominant cost of O(M log M); a worthy tradeoff for correctness
-            merge_history = sorted(self.merges.items(), key=lambda x: x[1])
-            from bytetok.bpe import RustBPEEncoder
-
-            self._encoder = RustBPEEncoder(merge_history)
+        # Build or retrieve cached converter.
+        converter = self._get_rust_converter()
+        if converter is None:
+            return chunks
 
         if num_workers is None:
             workers = os.cpu_count() or 1
@@ -423,10 +405,8 @@ class Tokenizer(ABC):
             or total_tokens < 32_768
             or avg_chunk_tokens < 8
         ):
-            return [self._encoder.encode(chunk) for chunk in chunks]
+            return [converter.encode(chunk) for chunk in chunks]
 
         # parallel path delegates multi-chunk encoding to rust
         # to avoids python side thread scheduling overhead
-        if self._encoder is None:
-            return chunks
-        return self._encoder.encode_many(chunks)
+        return converter.encode_many(chunks)

@@ -2,7 +2,7 @@
 
 import regex as re
 
-from ._bpe import Token
+from .types import Token
 
 
 class ByteTokError(Exception):

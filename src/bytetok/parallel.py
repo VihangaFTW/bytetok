@@ -4,7 +4,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Literal
 
 from .errors import StrategyError
-from ._bpe import Token
+from .types import Token
 
 if TYPE_CHECKING:
     from ._models.base import Tokenizer

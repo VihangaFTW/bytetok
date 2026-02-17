@@ -18,7 +18,7 @@ This project started as a weekend experiment with BPE for text compression. I la
 
 Libraries like OpenAI's [tiktoken](https://github.com/openai/tiktoken) and Google's [sentencepiece](https://github.com/google/sentencepiece) exist and are probably better for production work. But ByteTok wasn't designed to compete with them or benchmaxx. I wanted a straightforward API that took a string and returned a list of integers; not something that forced me to read through documentation for 200 function arguments (looking at you, `sentencepiece`).
 
-As my dataset requirements grew, the naive BPE implementation started struggling. So I rewrote the trainer and encoder in Rust using a much more efficient algorithm 😎.
+As my dataset requirements grew, the naive BPE implementation started struggling. So I rewrote the trainer and converter in Rust using a much more efficient algorithm 😎.
 
 ## Features
 

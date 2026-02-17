@@ -6,14 +6,25 @@
 ///
 /// Token IDs are assigned sequentially, starting from 0 for base tokens (e.g., bytes 0-255)
 /// and incrementing for each learned merge operation.
-pub type Token = usize;
+pub(crate) type Token = usize;
 
 /// Position of a token in a token sequence.
 ///
 /// Used to index into the doubly-linked list structure during training.
-pub type TextIdx = usize;
+pub(crate) type TextIdx = usize;
 
 /// Frequency count for token pairs during training.
 ///
 /// Tracks how many times a token pair appears in the current sequence.
-pub type TokenFreq = usize;
+pub(crate) type TokenFreq = usize;
+
+/// Merge order indicates when a merge rule was learned during training.
+///
+/// Lower values represent earlier merges (e.g., 0 = first merge, 1 = second merge).
+pub(crate) type MergeOrder = usize;
+
+/// A sequence of raw bytes.
+///
+/// Used for representing text as byte sequences before tokenization.
+pub(crate) type ByteSeq = Vec<u8>;
+

@@ -3,7 +3,7 @@
 from typing import Final, Literal, overload, override
 from abc import ABC, abstractmethod
 import logging
-from ._bpe import Token
+from .types import Token
 
 from .errors import SpecialTokenError, StrategyError
 

@@ -1,15 +1,13 @@
 """Basic byte-level tokenizer implementation."""
 
-from concurrent.futures import ThreadPoolExecutor
 from typing import override, TYPE_CHECKING
-import os
 from .base import ParallelMode, Tokenizer
 from .._decorators import measure_time
 import logging
 
 from ..errors import VocabularyError
 
-from .._bpe import Token
+from ..types import Token
 from ..trainer import train_bpe
 
 # need only classname for type annotation
@@ -72,8 +70,9 @@ class BasicTokenizer(Tokenizer):
 
         self.merges = result.merges  # used for encoding text -> tokens
         self.vocab = result.vocab  # used for decoding tokens -> text
-        # invalidate encoder cache since merges changed
-        self._encoder = None
+        # Invalidate Rust caches since merges changed.
+        self._converter = None
+        self._tokenizer = None
 
     @override
     def encode(
@@ -95,9 +94,12 @@ class BasicTokenizer(Tokenizer):
         """
         # BasicTokenizer does not support special token strategies.
         _ = strategy
-        # BasicTokenizer does not parallelize a single text stream safely.
+        # BasicTokenizer does not use worker hints for single-text encoding.
         _ = num_workers
-        return self._encode_one(text)
+        if not self.merges:
+            return list(text.encode("utf-8", errors="replace"))
+        tokenizer = self._get_rust_tokenizer(pattern=r".+")
+        return tokenizer.encode_bytes(text)
 
     @override
     def encode_batch(
@@ -124,29 +126,26 @@ class BasicTokenizer(Tokenizer):
         # BasicTokenizer does not support special token strategies.
         _ = strategy
 
-        if num_workers is None:
-            workers = os.cpu_count() or 1
-        else:
-            workers = max(1, num_workers)
-
-        def process_batch() -> list[list[Token]]:
-            """Encode all texts concurrently at the batch level."""
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                return list(pool.map(self._encode_one, texts))
+        # Worker hints are ignored because Rust batch methods handle parallelism internally.
+        _ = num_workers
+        if not texts:
+            return []
+        if not self.merges:
+            return [list(text.encode("utf-8", errors="replace")) for text in texts]
+        tokenizer = self._get_rust_tokenizer(pattern=r".+")
 
         match parallel_mode:
             case ParallelMode.OFF:
-                return [self._encode_one(text) for text in texts]
+                return [tokenizer.encode_bytes(text) for text in texts]
             case ParallelMode.BATCH:
-                return process_batch()
+                return tokenizer.encode_bytes_batch(texts)
             case ParallelMode.CHUNK:
-                # Chunk-mode is not used for BasicTokenizer because merges can
-                # span arbitrary byte boundaries inside a single text.
-                return [self._encode_one(text) for text in texts]
+                # Chunk-mode is equivalent to serial full-text encoding for BasicTokenizer.
+                return [tokenizer.encode_bytes(text) for text in texts]
             case ParallelMode.AUTO:
                 if len(texts) <= 1:
-                    return [self._encode_one(text) for text in texts]
-                return process_batch()
+                    return [tokenizer.encode_bytes(texts[0])]
+                return tokenizer.encode_bytes_batch(texts)
 
     @override
     def decode(self, tokens: list[Token]) -> str:
@@ -156,17 +155,13 @@ class BasicTokenizer(Tokenizer):
         :param tokens: Token sequence to decode.
         :returns: Decoded text where invalid UTF-8 is replaced.
         """
-        # token stream -> byte stream
-        txt_bytes = b"".join(self.vocab[tok] for tok in tokens)
-        # byte stream -> python string
-        return txt_bytes.decode("utf-8", errors="replace")
+        tokenizer = self._get_rust_tokenizer(pattern=r".+")
+        try:
+            return tokenizer.decode_tokens(tokens, errors="replace")
+        except ValueError as e:
+            raise VocabularyError("token not found in vocabulary") from e
 
     def _encode_one(self, text: str) -> list[Token]:
         """Encode one text string through byte conversion and BPE merges."""
-        # encode Unicode text into bytes
-        txt_bytes = text.encode("utf-8", errors="replace")
-        # convert each byte to [0-255] token range
-        tokens = list(txt_bytes)
-        # return bpe of tokens
-        return self._apply_fast_bpe_chunk(tokens)
+        return self.encode(text)
 

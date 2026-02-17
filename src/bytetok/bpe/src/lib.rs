@@ -5,29 +5,52 @@
 
 #![deny(clippy::unwrap_used)]
 #![deny(clippy::expect_used)]
-#![deny(clippy::panic)]
 #![deny(unused_must_use)]
 
+
+
+
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-mod encoder;
+mod converter;
 mod tokenizer;
 mod trainer;
 mod types;
-use trainer::BPETrainer;
+mod error;
 
-use crate::encoder::BPEEncoder;
-use crate::tokenizer::Tokenizer;
+
+use crate::error::{DecodeError, EncodeError, ErrorMode, TokenizerInitError};
+use crate::trainer::BPETrainer;
+use crate::converter::BPEConverter;
+use crate::tokenizer::BPETokenizer;
+
+/// Parses the Python `errors` string into an `ErrorMode`.
+///
+/// Defaults to `"replace"` when `None` is passed.
+fn parse_error_mode(errors: Option<&str>) -> PyResult<ErrorMode>{
+    let mode_str =  errors.unwrap_or("replace");
+    ErrorMode::from_str(mode_str).ok_or_else(|| {
+        PyErr::new::<PyValueError,_>(format!(
+            "invalid error mode: {mode_str:?} (expected \"strict\" or \"replace\")"
+        ))
+    })
+}
+
+fn decode_err_to_pyerr(e: DecodeError) -> PyErr {
+    PyErr::new::<PyValueError, _>(e.to_string())
+}
+
+fn encode_err_to_pyerr(e: EncodeError) -> PyErr {
+    PyErr::new::<PyValueError, _>(e.to_string())
+}
 
 /// Python wrapper for full BPE tokenizer (regex splitting + BPE encoding).
 ///
-/// Unlike `RustBPEEncoder` which only applies merge rules to pre-tokenized
-/// integer sequences, this class accepts raw text strings and performs the
-/// entire pipeline in Rust: regex splitting → byte conversion → BPE merge.
-///
-/// This eliminates per-chunk Python/Rust FFI overhead and enables true
-/// parallel encoding via Rayon (with the GIL fully released).
+/// The tokenizer provides two encoding modes:
+/// - **Pattern-based**: Uses regex to split text before encoding (e.g., GPT-style).
+/// - **Raw bytes**: Treats entire text as one chunk (e.g., BasicTokenizer).
 ///
 /// # Example (Python)
 ///
@@ -36,14 +59,19 @@ use crate::tokenizer::Tokenizer;
 ///
 /// merge_history = [((97, 98), 256)]  # 'a','b' -> 256
 /// pattern = r"\S+"
-/// tok = RustBPETokenizer(merge_history, pattern)
+/// tok = RustBPETokenizer(merge_history, pattern, [("<|endoftext|>", 100257)])
 ///
+/// # Pattern-based encoding (with regex splitting).
 /// tokens = tok.encode_text("ab cd")       # [256, 99, 100]
 /// batch  = tok.encode_texts(["ab", "cd"]) # [[256], [99, 100]]
+///
+/// # Raw byte encoding (no regex splitting).
+/// tokens = tok.encode_bytes("ab cd")       # Different result without splitting.
+/// batch  = tok.encode_bytes_batch(["ab", "cd"])
 /// ```
 #[pyclass]
 pub struct RustBPETokenizer {
-    tokenizer: Tokenizer,
+    tokenizer: BPETokenizer,
 }
 
 #[pymethods]
@@ -56,18 +84,35 @@ impl RustBPETokenizer {
     ///     pattern: Regex pattern string for splitting text into chunks.
     ///              Must be compatible with fancy-regex (supports lookaheads
     ///              but NOT possessive quantifiers like ?+ or ++).
+    ///     special_tokens: Optional list of (token_text, token_id) pairs.
+    ///                     Token IDs must not overlap with existing vocab IDs.
     ///
     /// Returns:
     ///     A new RustBPETokenizer instance.
     ///
     /// Raises:
-    ///     ValueError: If the regex pattern fails to compile.
+    ///     ValueError: If the regex pattern fails to compile or a special token is invalid.
     #[new]
-    fn new(merge_history: Vec<((usize, usize), usize)>, pattern: &str) -> PyResult<Self> {
-        use pyo3::exceptions::PyValueError;
+    #[pyo3(signature = (merge_history, pattern, special_tokens = Vec::new()))]
+    fn new(
+        merge_history: Vec<((usize, usize), usize)>,
+        pattern: &str,
+        special_tokens: Vec<(String, usize)>,
+    ) -> PyResult<Self> {
+        let special_token_refs: Vec<(&str, usize)> = special_tokens
+            .iter()
+            .map(|(text, token)| (text.as_str(), *token))
+            .collect();
 
-        let tokenizer = Tokenizer::new(merge_history, pattern)
-            .map_err(|e| PyErr::new::<PyValueError, _>(format!("invalid regex pattern: {e}")))?;
+        let tokenizer = BPETokenizer::new(merge_history, pattern, &special_token_refs)
+            .map_err(|e| match e {
+                TokenizerInitError::InvalidPattern(err) => {
+                    PyErr::new::<PyValueError, _>(format!("invalid regex pattern: {err}"))
+                }
+                TokenizerInitError::InvalidSpecialToken(err) => {
+                    PyErr::new::<PyValueError, _>(format!("invalid special token: {err}"))
+                }
+            })?;
 
         Ok(Self { tokenizer })
     }
@@ -80,10 +125,14 @@ impl RustBPETokenizer {
     ///     text: Input text to encode.
     ///
     /// Returns:
-    ///     Encoded token sequence.
-    fn encode_text(&self, py: Python<'_>, text: &str) {
+    ///     Encoded token sequence as a list of token IDs.
+    ///
+    /// Raises:
+    ///     ValueError: If the regex engine fails during text splitting.
+    fn encode_text(&self, py: Python<'_>, text: &str) -> PyResult<Vec<usize>> {
         let tokenizer = &self.tokenizer;
-        py.detach(move || tokenizer.encode_text(text));
+        py.detach(move || tokenizer.encode_text(text))
+            .map_err(encode_err_to_pyerr)
     }
     /// Encode multiple texts in parallel entirely in Rust.
     ///
@@ -95,9 +144,16 @@ impl RustBPETokenizer {
     ///
     /// Returns:
     ///     List of encoded token sequences in input order.
-    fn encode_texts(&self, py: Python<'_>, texts: Vec<String>) -> Vec<Vec<usize>> {
+    ///
+    /// Raises:
+    ///     ValueError: If the regex engine fails during text splitting.
+    fn encode_texts(&self, py: Python<'_>, texts: Vec<String>) -> PyResult<Vec<Vec<usize>>> {
         let tokenizer = &self.tokenizer;
-        py.detach(move || tokenizer.encode_texts(&texts))
+        py.detach(move || {
+            let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+            tokenizer.encode_texts(&text_refs)
+        })
+        .map_err(encode_err_to_pyerr)
     }
     /// Encode a single text as raw bytes → BPE (no regex splitting).
     ///
@@ -124,7 +180,64 @@ impl RustBPETokenizer {
     ///     List of encoded token sequences in input order.
     fn encode_bytes_batch(&self, py: Python<'_>, texts: Vec<String>) -> Vec<Vec<usize>> {
         let tokenizer = &self.tokenizer;
-        py.detach(move || tokenizer.encode_bytes_batch(&texts))
+        py.detach(move || {
+            let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+            tokenizer.encode_bytes_batch(&text_refs)
+        })
+    }
+
+    /// Decode a token sequence back into a UTF-8 string.
+    ///
+    /// The GIL is released for the entire computation.
+    ///
+    /// Args:
+    ///     tokens: List of token IDs to decode.
+    ///     errors: How to handle invalid UTF-8 — "strict" raises ValueError,
+    ///             "replace" substitutes U+FFFD (default: "replace").
+    ///
+    /// Returns:
+    ///     Decoded string.
+    ///
+    /// Raises:
+    ///     ValueError: If a token ID is unknown, or UTF-8 is invalid under "strict" mode,
+    ///                 or `errors` is not a recognised mode.
+    #[pyo3(signature = (tokens, errors=None))]
+    fn decode_tokens(&self, py: Python<'_>, tokens: Vec<usize>, errors: Option<&str>) -> PyResult<String> {
+        let mode = parse_error_mode(errors)?;
+        let tokenizer = &self.tokenizer;
+
+        let result = py.detach(move || tokenizer.decode_tokens(&tokens, mode));
+        result.map_err(decode_err_to_pyerr)
+    }
+
+    /// Decode multiple token sequences in parallel.
+    ///
+    /// The GIL is released for the entire computation.
+    ///
+    /// Args:
+    ///     token_seqs: List of token sequences to decode.
+    ///     errors: How to handle invalid UTF-8 — "strict" or "replace" (default: "replace").
+    ///
+    /// Returns:
+    ///     List of decoded strings in input order.
+    ///
+    /// Raises:
+    ///     ValueError: If any token ID is unknown, or UTF-8 is invalid under "strict" mode.
+    #[pyo3(signature = (token_seqs, errors = None))]
+    fn decode_tokens_batch(&self, py: Python<'_>, token_seqs: Vec<Vec<usize>>, errors: Option<&str>) -> PyResult<Vec<String>> {
+        let mode = parse_error_mode(errors)?;
+        let tokenizer = &self.tokenizer;
+        let refs: Vec<&[usize]> = token_seqs.iter().map(|v| v.as_slice()).collect();
+        let result = py.detach(move || tokenizer.decode_tokens_batch(&refs, mode));
+        result.map_err(decode_err_to_pyerr)
+    }   
+
+    /// Returns the vocabulary size (number of tokens).
+    ///
+    /// Returns:
+    ///     Total number of tokens in the vocabulary.
+    fn vocab_size(&self) -> usize {
+        self.tokenizer.vocab_size()
     }
 }
 
@@ -225,47 +338,50 @@ impl RustBPETrainer {
     }
 }
 
-/// Python wrapper for BPE encoder.
+/// Python wrapper for BPE converter.
 ///
 /// Applies learned BPE merge rules to encode token sequences efficiently.
-/// The encoder uses merge rules learned during training to compress sequences.
+/// The converter uses merge rules learned during training to compress sequences.
 ///
 /// # Example (Python)
 ///
 /// ```python
-/// from bytetok._bpe_rs import RustBPEEncoder
+/// from bytetok._bpe_rs import RustBPEConverter
 ///
-/// # Create encoder from merge history
+/// # Create converter from merge history
 /// merge_history = [((0, 1), 256), ((256, 0), 257)]
-/// encoder = RustBPEEncoder(merge_history)
+/// converter = RustBPEConverter(merge_history)
 ///
 /// # Encode token sequence
 /// tokens = [0, 1, 0]
-/// encoded = encoder.encode(tokens)  # Returns [257]
+/// encoded = converter.encode(tokens)  # Returns [257]
 ///
 /// # Check if pair can be merged
-/// can_merge = encoder.can_merge(0, 1)  # Returns True
+/// can_merge = converter.can_merge(0, 1)  # Returns True
 /// ```
 #[pyclass]
-pub struct RustBPEEncoder {
-    encoder: BPEEncoder,
+pub struct RustBPEConverter {
+    converter: BPEConverter,
 }
 
 #[pymethods]
-impl RustBPEEncoder {
-    /// Creates a new BPE encoder from merge history.
+impl RustBPEConverter {
+    /// Creates a new BPE converter from merge history.
     ///
     /// Args:
     ///     merge_history: List of merge rules as ((left_token, right_token), merged_token).
     ///                   The order determines merge priority (earlier = higher priority).
     ///
     /// Returns:
-    ///     A new RustBPEEncoder instance.
+    ///     A new RustBPEConverter instance.
+    ///
+    /// Raises:
+    ///     ValueError: If a special token ID collides with an existing vocabulary token.
     #[new]
-    fn new(merge_history: Vec<((usize, usize), usize)>) -> Self {
-        RustBPEEncoder {
-            encoder: BPEEncoder::new(merge_history),
-        }
+    fn new(merge_history: Vec<((usize, usize), usize)>) -> PyResult<Self> {
+        let converter = BPEConverter::new(merge_history, &[])
+            .map_err(|e| PyErr::new::<PyValueError, _>(format!("invalid special token: {e}")))?;
+        Ok(RustBPEConverter { converter })
     }
 
     /// Encodes a token sequence using learned BPE merge rules.
@@ -277,10 +393,10 @@ impl RustBPEEncoder {
     ///     Encoded token sequence with merges applied.
     ///
     /// Note:
-    ///     This method releases the Python GIL while the Rust encoder executes.
+    ///     This method releases the Python GIL while the Rust converter executes.
     fn encode(&self, py: Python<'_>, tokens: Vec<usize>) -> Vec<usize> {
-        let encoder = &self.encoder;
-        py.detach(move || encoder.encode(tokens))
+        let converter = &self.converter;
+        py.detach(move || converter.encode(tokens))
     }
 
     /// Encodes many token sequences in parallel using Rayon.
@@ -294,11 +410,11 @@ impl RustBPEEncoder {
     /// Note:
     ///     This method releases the Python GIL while Rayon workers execute.
     fn encode_many(&self, py: Python<'_>, inputs: Vec<Vec<usize>>) -> Vec<Vec<usize>> {
-        let encoder = &self.encoder;
+        let converter = &self.converter;
         py.detach(move || {
             inputs
                 .into_par_iter()
-                .map(|tokens| encoder.encode(tokens))
+                .map(|tokens| converter.encode(tokens))
                 .collect()
         })
     }
@@ -312,15 +428,29 @@ impl RustBPEEncoder {
     /// Returns:
     ///     True if a merge rule exists for this pair, False otherwise.
     fn can_merge(&self, left: usize, right: usize) -> bool {
-        self.encoder.can_merge(left, right)
+        self.converter.can_merge(left, right)
     }
 
     /// Returns the total number of merge rules.
     ///
     /// Returns:
-    ///     The number of learned merge rules in this encoder.
+    ///     The number of learned merge rules in this converter.
     fn num_merges(&self) -> usize {
-        self.encoder.num_merges()
+        self.converter.num_merges()
+    }
+
+    fn encode_str(&self, text: &str) -> Vec<usize> {
+        text.bytes().map(|b| b as usize).collect()
+    }
+
+    fn encode_str_batch(&self, py: Python<'_>, texts: Vec<String>) -> Vec<Vec<usize>> {
+        let converter = &self.converter;
+        py.detach(move || {
+            texts
+                .into_par_iter()
+                .map(|t| converter.encode(t.bytes().map(|b| b as usize).collect()))
+                .collect()
+        })
     }
 }
 
@@ -332,11 +462,12 @@ impl RustBPEEncoder {
 /// # Exports
 ///
 /// * `RustBPETrainer` - Fast BPE training implementation.
-/// * `RustBPEEncoder` - Efficient BPE encoding using learned rules.
+/// * `RustBPEConverter` - Efficient BPE encoding using learned rules.
+/// * `RustBPETokenizer` - Efficient pre-tokenization -> encoding pipeline using regex splitting and `RustBPEConverter`.
 #[pymodule]
 fn _bpe_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustBPETokenizer>()?;
     m.add_class::<RustBPETrainer>()?;
-    m.add_class::<RustBPEEncoder>()?;
+    m.add_class::<RustBPEConverter>()?;
     Ok(())
 }
