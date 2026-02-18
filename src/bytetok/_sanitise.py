@@ -18,11 +18,10 @@ def _escape_ctrl_chars(s: str) -> str:
     return "".join(cleaned)
 
 
-def render_bytes(b: bytes) -> str:
+def _render_bytes(b: bytes) -> str:
     """
     Decode bytes as UTF-8 and escape control characters.
 
     Invalid UTF-8 sequences are replaced with the Unicode replacement character.
     """
     return _escape_ctrl_chars(b.decode("utf-8", errors="replace"))
-

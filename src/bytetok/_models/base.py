@@ -2,20 +2,18 @@
 Base tokenizer interface for byte-level tokenization implementations.
 """
 
-import os
 import logging
 from abc import ABC, abstractmethod
 from typing import Final, TYPE_CHECKING
 from pathlib import Path
 
-from .._sanitise import render_bytes
+from .._sanitise import _render_bytes
 from ..types import Encoding, Token, Vocabulary
-from ..parallel import ParallelMode
 from ..errors import ModelLoadError
 
 if TYPE_CHECKING:
     from ..strategy import SpecialTokenStrategy
-    from ..bpe import RustBPEConverter, RustBPETokenizer
+    from ..bpe import  RustBPETokenizer
 
 
 PREFIX: Final[str] = "ByteTok"
@@ -45,8 +43,6 @@ class Tokenizer(ABC):
         self.special_toks: dict[str, Token] = {}
         # tokens -> bytes
         self.vocab: Vocabulary = self._build_vocab()
-        # cached Rust converter for fast BPE.
-        self._converter: "RustBPEConverter | None" = None
         # cached Rust tokenizer for full encode/decode pipeline
         self._tokenizer: "RustBPETokenizer | None" = None
 
@@ -62,7 +58,6 @@ class Tokenizer(ABC):
         self,
         text: str,
         strategy: "SpecialTokenStrategy | None" = None,
-        num_workers: int | None = None,
     ) -> list[Token]:
         """Encode text into a sequence of tokens."""
         ...
@@ -199,8 +194,7 @@ class Tokenizer(ABC):
         self.special_toks = special_toks
         self.merges = merges
         self.vocab = self._build_vocab()
-        # Invalidate Rust caches since model state changed.
-        self._converter = None
+        # Invalidate tokenizer cache since model state changed
         self._tokenizer = None
 
         log.info(
@@ -212,24 +206,15 @@ class Tokenizer(ABC):
         self,
         texts: list[str],
         strategy: "SpecialTokenStrategy | None" = None,
-        num_workers: int | None = None,
-        parallel_mode: ParallelMode = ParallelMode.AUTO,
     ) -> list[list[Token]]:
         """
         Encode multiple texts into sequences of tokens in batch.
 
         :param texts: List of text strings to encode.
         :param strategy: Strategy to handle special tokens in texts.
-        :param num_workers: Thread pool size for parallel encoding.
-        :param parallel_mode: Parallelization strategy - "auto", "batch", "chunk", or "off".
         :return: List of token sequences, one for each input text.
         """
         ...
-
-    def _to_base_tokens(self, chunks: list[str]) -> list[list[Token]]:
-        """Convert text chunks into UTF-8 byte token chunks."""
-        # turn chunks into base token representations
-        return [list(chunk.encode("utf-8", errors="replace")) for chunk in chunks]
 
     def _build_vocab(self) -> Vocabulary:
         """
@@ -298,7 +283,7 @@ class Tokenizer(ABC):
                 f.write(f"ST [{tok}] {seq}\n")
             # save base tokens + merge toke pairs -> token ids
             for tok, b in self.vocab.items():
-                subword = render_bytes(b)
+                subword = _render_bytes(b)
                 # token arises from merging: show derivation from child tokens
                 if tok in inverted_merges:
                     # extract child tokens and convert to bytes
@@ -310,103 +295,30 @@ class Tokenizer(ABC):
                     # raw bytes -> utf-8 while handling utf fragments and
                     # escaping control characters
                     subword0, subword1 = (
-                        render_bytes(raw_subword0),
-                        render_bytes(raw_subword1),
+                        _render_bytes(raw_subword0),
+                        _render_bytes(raw_subword1),
                     )
                     f.write(f"[{tok}] [{subword0}][{subword1}] -> {subword}\n")
                 else:
                     # one of base 256 tokens: no merging
                     f.write(f"[{tok}] {subword}\n")
 
-    def _merge_history(self) -> list[tuple[tuple[int, int], int]]:
+    def _get_merge_history(self) -> list[tuple[tuple[int, int], int]]:
         """Return merge history sorted by merge token id."""
         return sorted(self.merges.items(), key=lambda x: x[1])
 
-    def _get_rust_converter(self) -> "RustBPEConverter | None":
-        """Build or return cached RustBPEConverter."""
-        if not self.merges:
-            return None
-        if self._converter is None:
-            from bytetok.bpe import RustBPEConverter
-
-            self._converter = RustBPEConverter(self._merge_history())
-        return self._converter
 
     def _get_rust_tokenizer(self, pattern: str | None = None) -> "RustBPETokenizer":
         """Build or return cached RustBPETokenizer."""
         if self._tokenizer is None:
             from bytetok.bpe import RustBPETokenizer
 
+            # fallback chain: use provided pattern, then self.pat, then r".+" (match entire input as one chunk)
             effective_pattern = pattern if pattern is not None else (self.pat or r".+")
             special_tokens = list(self.special_toks.items())
             self._tokenizer = RustBPETokenizer(
-                self._merge_history(),
+                self._get_merge_history(),
                 effective_pattern,
                 special_tokens,
             )
         return self._tokenizer
-
-    def _apply_fast_bpe_chunk(self, chunk: list[Token]) -> list[Token]:
-        """
-        Apply BPE merges using fast Rust implementation.
-
-        :param chunk: List of tokens (initially bytes 0-255).
-        :returns: Compressed token sequence after applying learned merges.
-        """
-        if not self.merges:
-            return chunk
-        converter = self._get_rust_converter()
-        if converter is None:
-            return chunk
-        # Apply all merges using O(N log N) algorithm.
-        return converter.encode(chunk)
-
-    def _apply_fast_bpe_chunks(
-        self,
-        chunks: list[list[Token]],
-        num_workers: int | None = None,
-        min_chunks_for_parallel: int = 8,
-    ) -> list[list[Token]]:
-        """
-        Apply BPE merges to many chunks using fast Rust implementation.
-
-        Uses a serial path for small workloads and Rust-side parallel encoding
-        for larger workloads. Output order matches input chunk order in both paths.
-
-        :param chunks: List of token chunks (each chunk initially bytes 0-255).
-        :param num_workers: Number of worker threads for parallel path.
-        :param min_chunks_for_parallel: Minimum chunk count to enable parallel path.
-        :returns: List of compressed token chunks after applying learned merges.
-        """
-        if not chunks:
-            return []
-
-        # tokenizer hasnt been trained yet
-        if not self.merges:
-            return chunks
-
-        # Build or retrieve cached converter.
-        converter = self._get_rust_converter()
-        if converter is None:
-            return chunks
-
-        if num_workers is None:
-            workers = os.cpu_count() or 1
-        else:
-            workers = max(1, num_workers)  # "0" interpreted as 1 worker
-
-        total_tokens = sum(len(chunk) for chunk in chunks)
-        avg_chunk_tokens = total_tokens / len(chunks)
-
-        # serial path for tiny workloads or explicit single-worker mode
-        if (
-            workers == 1
-            or len(chunks) < min_chunks_for_parallel
-            or total_tokens < 32_768
-            or avg_chunk_tokens < 8
-        ):
-            return [converter.encode(chunk) for chunk in chunks]
-
-        # parallel path delegates multi-chunk encoding to rust
-        # to avoids python side thread scheduling overhead
-        return converter.encode_many(chunks)

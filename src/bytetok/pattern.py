@@ -13,9 +13,6 @@ Pattern = Literal[
     "qwen2",
     "deepseek-coder",
     "deepseek-llm",
-    "starcoder",
-    "falcon",
-    "bloom",
 ]
 
 
@@ -98,22 +95,6 @@ class TokenPattern(str, Enum):
         r"\p{N}+"
     )
 
-    # coding-focused models
-    STARCODER = (
-        r"\p{N}|"
-        r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|"
-        r"\s+(?!\S)"
-    )
-
-    FALCON = (
-        r"[\p{P}\$\+<=>^\~\|`]+|"
-        r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|"
-        r"\s+(?!\S)|"
-        r"[0-9][0-9][0-9]"
-    )
-
-    # multilingual models
-    BLOOM = r" ?[^(\s|.,!?…。，、।۔،)]+"
 
     @classmethod
     def get(cls, name: str) -> str:

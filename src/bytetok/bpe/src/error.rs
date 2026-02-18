@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 use crate::types::Token;
 
@@ -14,15 +14,17 @@ pub(crate) enum ErrorMode {
     Replace,
 }
 
-impl ErrorMode {
-    /// Parse from a Python-style error mode string.
-    ///
-    /// Returns `None` for unrecognised values.
-    pub(crate) fn from_str(s: &str) -> Option<Self> {
+impl FromStr for ErrorMode {
+    type Err = String;
+
+    /// Parses a Python-style error mode string ("strict" or "replace").
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "strict" => Some(Self::Strict),
-            "replace" => Some(Self::Replace),
-            _ => None,
+            "strict" => Ok(Self::Strict),
+            "replace" => Ok(Self::Replace),
+            _ => Err(format!(
+                "invalid error mode: {s:?} (expected \"strict\" or \"replace\")"
+            )),
         }
     }
 }
@@ -75,24 +77,24 @@ impl fmt::Display for SpecialTokenError {
 }
 
 
-/// Errors that can occur when initializng a Tokenizer.
+/// Errors that can occur when initializing a tokenizer.
 #[derive(Debug)]
-pub(crate) enum TokenizerInitError{
+pub(crate) enum TokenizerInitError {
+    /// The regex pattern failed to compile.
     InvalidPattern(fancy_regex::Error),
-    InvalidSpecialToken(SpecialTokenError)
+    /// A special token ID collides with an existing vocabulary entry.
+    InvalidSpecialToken(SpecialTokenError),
 }
 
-impl From<fancy_regex::Error> for TokenizerInitError{
+impl From<fancy_regex::Error> for TokenizerInitError {
     fn from(e: fancy_regex::Error) -> Self {
         Self::InvalidPattern(e)
     }
 }
 
-impl From<SpecialTokenError> for TokenizerInitError{
+impl From<SpecialTokenError> for TokenizerInitError {
     fn from(e: SpecialTokenError) -> Self {
         Self::InvalidSpecialToken(e)
     }
 }
-
-
 

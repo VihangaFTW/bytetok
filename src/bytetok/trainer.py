@@ -25,7 +25,7 @@ class BPETrainingResult:
     n_merges_completed: int
 
 
-def train_bpe(
+def _train_bpe(
     tokens: list[Token], n_merges: int, verbose: bool = False
 ) -> BPETrainingResult:
     """

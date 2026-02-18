@@ -1,14 +1,13 @@
 """ByteTok: Byte-level tokenization library."""
 
-from ._models.base import Tokenizer
-from ._models.basic import BasicTokenizer
-from ._models.regex import RegexTokenizer
+from ._models import Tokenizer
+from ._models import BasicTokenizer
+from ._models import RegexTokenizer
 from .factory import (
     from_pretrained,
     get_tokenizer,
 )
 from .pattern import TokenPattern, get_pattern, list_patterns
-from .parallel import list_parallel_modes
 from .strategy import (
     AllowAllStrategy,
     AllowCustomStrategy,
@@ -41,6 +40,5 @@ __all__ = [
     "get_pattern",
     "from_pretrained",
     "list_patterns",
-    "list_parallel_modes",
     "list_strategies",
 ]

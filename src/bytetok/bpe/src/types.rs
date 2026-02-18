@@ -1,6 +1,6 @@
-//! Type aliases for BPE training and encoding.
+//! Type aliases and shared types for BPE training and encoding.
 //!
-//! These type aliases provide semantic clarity and type safety throughout the codebase.
+//! These type aliases provide semantic clarity throughout the codebase.
 
 /// Represents a token identifier in the vocabulary.
 ///
@@ -27,4 +27,11 @@ pub(crate) type MergeOrder = usize;
 ///
 /// Used for representing text as byte sequences before tokenization.
 pub(crate) type ByteSeq = Vec<u8>;
+
+/// A pair of adjacent tokens.
+///
+/// Used as a key for looking up merge rules during encoding and for
+/// tracking pair frequencies during training.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct TokenPair(pub(crate) Token, pub(crate) Token);
 

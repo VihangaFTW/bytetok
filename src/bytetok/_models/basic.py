@@ -8,7 +8,7 @@ import logging
 from ..errors import VocabularyError
 
 from ..types import Token
-from ..trainer import train_bpe
+from ..trainer import _train_bpe
 
 # need only classname for type annotation
 if TYPE_CHECKING:
@@ -60,7 +60,7 @@ class BasicTokenizer(Tokenizer):
         # merges beyond base byte vocabulary
         n_merges = vocab_size - 256
 
-        result = train_bpe(tokens, n_merges, verbose=verbose)
+        result = _train_bpe(tokens, n_merges, verbose=verbose)
 
         if result.n_merges_completed < n_merges:
             log.warning(
@@ -79,7 +79,6 @@ class BasicTokenizer(Tokenizer):
         self,
         text: str,
         strategy: "SpecialTokenStrategy | None" = None,
-        num_workers: int | None = None,
     ) -> list[Token]:
         """
         Encode text into tokens using byte-level BPE.
@@ -164,4 +163,3 @@ class BasicTokenizer(Tokenizer):
     def _encode_one(self, text: str) -> list[Token]:
         """Encode one text string through byte conversion and BPE merges."""
         return self.encode(text)
-

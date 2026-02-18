@@ -17,6 +17,8 @@ _TOKENIZER_REGISTRY: Final[dict[str, type[Tokenizer]]] = {
     "regex": RegexTokenizer,
     "basic": BasicTokenizer,
 }
+
+
 @overload
 def get_tokenizer(pattern: Pattern) -> Tokenizer:
     """Create a tokenizer from a named built-in pattern."""
@@ -110,11 +112,11 @@ def from_pretrained(model_path: str) -> Tokenizer:
     tokenizer.load(model_path)
 
     return tokenizer
+
+
 __all__ = [
     "Pattern",
     "get_pattern",
     "get_tokenizer",
     "from_pretrained",
 ]
-
-

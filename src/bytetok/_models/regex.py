@@ -1,25 +1,26 @@
 """Regex-based byte-level tokenizer implementation."""
 
+import regex as re
+import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import override
 
+
 from ..errors import (
-    PatternError,
-    SpecialTokenError,
     TokenizationError,
     VocabularyError,
 )
 from ..pattern import TokenPattern
 from ..strategy import SpecialTokenStrategy
 
-from .base import Tokenizer, ParallelMode
 from .._decorators import measure_time
 from ..types import (
     Token,
 )
-from ..trainer import train_bpe
+from ..trainer import _train_bpe
 
-import regex as re
-import logging
+
+from .base import Tokenizer
 
 
 log = logging.getLogger(__name__)
@@ -37,18 +38,12 @@ class RegexTokenizer(Tokenizer):
             self.pat = TokenPattern.get("gpt4o")
         else:
             self.pat = pattern
-        self.compiled_pat: re.Pattern[str] = _compile_pattern(self.pat)
         self.special_toks: dict[str, Token] = {}
-        self.inverted_special_tokens: dict[Token, str] = {}
 
     @override
     def load(self, model_filename: str) -> None:
         """Load tokenizer state and refresh regex/special-token caches."""
         super().load(model_filename)
-        self.compiled_pat = _compile_pattern(self.pat)
-        self.inverted_special_tokens = {
-            token: seq for seq, token in self.special_toks.items()
-        }
 
     @override
     @measure_time
@@ -85,7 +80,7 @@ class RegexTokenizer(Tokenizer):
 
         n_merges = vocab_size - 256
 
-        result = train_bpe(tokens, n_merges, verbose=verbose)
+        result = _train_bpe(tokens, n_merges, verbose=verbose)
 
         if result.n_merges_completed < n_merges:
             log.warning(
@@ -104,7 +99,6 @@ class RegexTokenizer(Tokenizer):
         self,
         text: str,
         strategy: SpecialTokenStrategy | None = None,
-        num_workers: int | None = None,
     ) -> list[Token]:
         """
         Encode text into a sequence of tokens.
@@ -115,15 +109,13 @@ class RegexTokenizer(Tokenizer):
 
         :param text: Text to encode.
         :param strategy: Strategy used to select allowed special tokens.
-        :param num_workers: Worker count for chunk-level BPE application.
         :returns: Encoded token sequence.
         :raises TokenizationError: If internal chunk assembly fails unexpectedly.
         """
 
+        tokenizer = self._get_rust_tokenizer(pattern=self.pat)
         # no strategy is inferred as no special token handling
         if strategy is None:
-            _ = num_workers
-            tokenizer = self._get_rust_tokenizer(pattern=self.pat)
             try:
                 return tokenizer.encode_text(text)
             except ValueError as e:
@@ -131,6 +123,8 @@ class RegexTokenizer(Tokenizer):
 
         # retrieve special tokens as defined by chosen strategy
         special_toks = strategy.handle(text, self.special_toks)
+        
+        # TODO: PORT LOGIC BELOW TO RUST TOKENZIER
         # escape regex metachars like "+" in special tokens to avoid unwanted effects
         esc_special_toks = [re.escape(seq) for seq in special_toks]
         # The capturing group parentheses make re.split() include
@@ -164,10 +158,11 @@ class RegexTokenizer(Tokenizer):
                 normal_positions.append(len(out_parts) - 1)
 
         # encode all normal chunks in parallel
-        base_encodings = self._to_base_tokens(normal_chunks)
-        encoded_normals = self._apply_fast_bpe_chunks(
-            base_encodings, num_workers=num_workers
-        )
+        try:
+            encoded_normals = tokenizer.encode_texts(normal_chunks)
+        except ValueError as e:
+            raise TokenizationError("failed to encode text") from e
+
         # insert encodings at correct positions in accumulator
         try:
             for pos, encoding in zip(normal_positions, encoded_normals, strict=True):
@@ -188,48 +183,20 @@ class RegexTokenizer(Tokenizer):
         self,
         texts: list[str],
         strategy: "SpecialTokenStrategy | None" = None,
-        num_workers: int | None = None,
-        parallel_mode: ParallelMode = ParallelMode.AUTO,
     ) -> list[list[Token]]:
         """
-        Encode many texts using the requested parallelization mode.
-
-        ``off`` encodes texts serially. ``chunk`` encodes each text using
-        chunk-level parallelism. ``batch`` runs multiple full-text encodes in
-        parallel. ``auto`` chooses chunk mode for a single input text and batch
-        mode for multiple texts.
+        Encode many texts in parallel.
 
         :param texts: Text inputs to encode.
         :param strategy: Optional special token handling strategy.
-        :param num_workers: Worker count for chunk or batch parallelism.
-        :param parallel_mode: Parallelization policy.
         :returns: Encoded token sequences in input order.
         """
-        # delegate chunks among worker threads
+
         if not texts:
             return []
-
-        # Strategy mode is orchestrated in Python to preserve existing behavior.
-        if strategy is not None:
-            return [
-                self.encode(text, strategy=strategy, num_workers=num_workers)
-                for text in texts
-            ]
-
-        tokenizer = self._get_rust_tokenizer(pattern=self.pat)
-        _ = num_workers
-
-        match parallel_mode:
-            case ParallelMode.OFF:
-                return [tokenizer.encode_text(text) for text in texts]
-            case ParallelMode.CHUNK:
-                return [tokenizer.encode_text(text) for text in texts]
-            case ParallelMode.BATCH:
-                return tokenizer.encode_texts(texts)
-            case ParallelMode.AUTO:
-                if len(texts) == 1:
-                    return [tokenizer.encode_text(texts[0])]
-                return tokenizer.encode_texts(texts)
+        with ThreadPoolExecutor() as pool:
+            results = list(pool.map(lambda t: self.encode(t, strategy), texts))
+        return results
 
     @override
     def decode(self, tokens: list[Token]) -> str:
@@ -249,7 +216,9 @@ class RegexTokenizer(Tokenizer):
         except ValueError as e:
             for tok in tokens:
                 if tok not in self.vocab and tok not in self.inverted_special_tokens:
-                    raise VocabularyError("token not found in vocabulary", invalid_tok=tok) from e
+                    raise VocabularyError(
+                        "token not found in vocabulary", invalid_tok=tok
+                    ) from e
             raise VocabularyError("token not found in vocabulary") from e
 
     def register_special_tokens(self, special_toks: list[str]) -> None:
@@ -282,16 +251,3 @@ class RegexTokenizer(Tokenizer):
             self.vocab[tok] = seq.encode("utf-8")
         # Invalidate Rust tokenizer cache so new special tokens are visible.
         self._tokenizer = None
-
-def _compile_pattern(pattern: str) -> re.Pattern:
-    """
-    Compile and validate a regex pattern.
-
-    :param pattern: Regex pattern string to compile.
-    :return: Compiled regex pattern.
-    :raises ValueError: If pattern is invalid.
-    """
-    try:
-        return re.compile(pattern)
-    except re.error as e:
-        raise PatternError("invalid regex pattern", pattern=pattern, regex_err=e)
