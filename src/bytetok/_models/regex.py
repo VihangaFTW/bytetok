@@ -2,14 +2,10 @@
 
 import regex as re
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from typing import override
 
 
-from ..errors import (
-    TokenizationError,
-    VocabularyError,
-)
+from ..errors import TokenizationError, VocabularyError, TrainingError
 from ..pattern import TokenPattern
 from ..strategy import SpecialTokenStrategy
 
@@ -70,9 +66,8 @@ class RegexTokenizer(Tokenizer):
         # handle list input and convert text to bytes
         if isinstance(text, list):
             text = "".join(text)
-
         # split text into chunks defined by pattern
-        chunks = [m.group(0) for m in re.finditer(self.compiled_pat, text)]
+        chunks = [m.group(0) for m in re.finditer(self.pat, text)]
         # convert each chunk to byte sequence and flatten into single sequence
         tokens: list[int] = []
         for chunk in chunks:
@@ -90,8 +85,7 @@ class RegexTokenizer(Tokenizer):
 
         self.merges = result.merges
         self.vocab = result.vocab
-        # Invalidate Rust caches since merges changed.
-        self._converter = None
+        # Invalidate Rust cache since merges changed.
         self._tokenizer = None
 
     @override
@@ -110,73 +104,30 @@ class RegexTokenizer(Tokenizer):
         :param text: Text to encode.
         :param strategy: Strategy used to select allowed special tokens.
         :returns: Encoded token sequence.
-        :raises TokenizationError: If internal chunk assembly fails unexpectedly.
+        :raises TrainingError: If the tokenizer has not been trained yet.
+        :raises TokenizationError: If encoding fails.
         """
+        if not self.merges:
+            raise TrainingError(
+                f"{self.__class__.__name__} must be trained before encoding"
+            )
 
         tokenizer = self._get_rust_tokenizer(pattern=self.pat)
-        # no strategy is inferred as no special token handling
+
         if strategy is None:
             try:
                 return tokenizer.encode_text(text)
             except ValueError as e:
                 raise TokenizationError("failed to encode text") from e
 
-        # retrieve special tokens as defined by chosen strategy
-        special_toks = strategy.handle(text, self.special_toks)
-        
-        # TODO: PORT LOGIC BELOW TO RUST TOKENZIER
-        # escape regex metachars like "+" in special tokens to avoid unwanted effects
-        esc_special_toks = [re.escape(seq) for seq in special_toks]
-        # The capturing group parentheses make re.split() include
-        # the matched delimiters in result
-        # text is split on special tokens while keeping them as separate chunks
-        # otherwise we lose the special tokens after split (leads to lossy decoding)
-        special_pat = "(" + "|".join(esc_special_toks) + ")"
-        chunks = re.split(special_pat, text)
+        allowed_special = strategy.handle(text, self.special_toks)
 
-        # filter special chunks and normal chunks that require bpe
-        # so that all the normal chunks can be processed in parallel
-
-        # running accumulation of full encoding (normal + special chunks)
-        # None entries will be replaced by bpe encodings later
-        out_parts: list[list[Token] | None] = []
-
-        # track normal chunks that required bpe encoding
-        normal_chunks: list[str] = []
-        # track indices in out_parts where normal chunks
-        # should be inserted after encoding
-        normal_positions: list[int] = []
-
-        for chunk in chunks:
-            if chunk in special_toks:
-                # special tokens have pre-determined encodings
-                out_parts.append([special_toks[chunk]])
-            else:
-                # normal bpe chunk requires bpe encoding later
-                out_parts.append(None)
-                normal_chunks.append(chunk)
-                normal_positions.append(len(out_parts) - 1)
-
-        # encode all normal chunks in parallel
         try:
-            encoded_normals = tokenizer.encode_texts(normal_chunks)
+            if not allowed_special:
+                return tokenizer.encode_text(text)
+            return tokenizer.encode_text_with_special(text, allowed_special)
         except ValueError as e:
             raise TokenizationError("failed to encode text") from e
-
-        # insert encodings at correct positions in accumulator
-        try:
-            for pos, encoding in zip(normal_positions, encoded_normals, strict=True):
-                out_parts[pos] = encoding
-        except ValueError as e:
-            raise TokenizationError("internal error, kindly report issue") from e
-
-        tokens = []
-        # flatten parts to get full text encoding
-        for part in out_parts:
-            if part is not None:
-                tokens.extend(part)
-
-        return tokens
 
     @override
     def encode_batch(
@@ -185,69 +136,61 @@ class RegexTokenizer(Tokenizer):
         strategy: "SpecialTokenStrategy | None" = None,
     ) -> list[list[Token]]:
         """
-        Encode many texts in parallel.
+        Encode many texts in parallel via Rust/Rayon.
 
         :param texts: Text inputs to encode.
         :param strategy: Optional special token handling strategy.
         :returns: Encoded token sequences in input order.
+        :raises TrainingError: If the tokenizer has not been trained yet.
+        :raises TokenizationError: If encoding fails.
         """
+        if not self.merges:
+            raise TrainingError(
+                f"{self.__class__.__name__} must be trained before encoding"
+            )
 
         if not texts:
             return []
-        with ThreadPoolExecutor() as pool:
-            results = list(pool.map(lambda t: self.encode(t, strategy), texts))
-        return results
+
+        tokenizer = self._get_rust_tokenizer(pattern=self.pat)
+
+        if strategy is None:
+            try:
+                return tokenizer.encode_texts(texts)
+            except ValueError as e:
+                raise TokenizationError("failed to encode texts") from e
+
+        # Run strategy per text to trigger validation
+        for t in texts:
+            # Raises SpecialTokenError if strat is allow-none-raise
+            strategy.handle(t, self.special_toks)
+
+        # Resolve allowed specials once; the result is text-independent.
+        allowed_special = strategy.handle("", self.special_toks)
+
+        try:
+            if not allowed_special:
+                return tokenizer.encode_texts(texts)
+            return tokenizer.encode_texts_with_special(texts, allowed_special)
+        except ValueError as e:
+            raise TokenizationError("failed to encode texts") from e
 
     @override
     def decode(self, tokens: list[Token]) -> str:
         """
         Decode tokens into text, including registered special tokens.
 
-        Tokens are resolved first from the learned vocabulary and then from the
-        inverted special-token mapping.
-
         :param tokens: Token sequence to decode.
         :returns: Decoded text where invalid UTF-8 is replaced.
-        :raises VocabularyError: If any token is unknown to both mappings.
+        :raises TrainingError: If the tokenizer has not been trained yet.
+        :raises VocabularyError: If any token ID is not in the vocabulary.
         """
+        if not self.merges:
+            raise TrainingError(
+                f"{self.__class__.__name__} must be trained before decoding"
+            )
         tokenizer = self._get_rust_tokenizer(pattern=self.pat)
         try:
             return tokenizer.decode_tokens(tokens, errors="replace")
         except ValueError as e:
-            for tok in tokens:
-                if tok not in self.vocab and tok not in self.inverted_special_tokens:
-                    raise VocabularyError(
-                        "token not found in vocabulary", invalid_tok=tok
-                    ) from e
-            raise VocabularyError("token not found in vocabulary") from e
-
-    def register_special_tokens(self, special_toks: list[str]) -> None:
-        """
-        Register special tokens with auto-assigned IDs.
-
-        Special token IDs are assigned sequentially starting from vocab_size.
-        Must be called after training the tokenizer.
-
-        :param special_toks: List of special token strings to register.
-        :raises SpecialTokenError: If tokenizer hasn't been trained yet.
-        """
-        if not hasattr(self, "merges"):
-            raise SpecialTokenError(
-                f"{self.__class__.__name__} must be trained before registering special tokens"
-            )
-        # special tokens have auto assigned ids
-        vocab_size = 256 + len(self.merges)
-
-        # special tokens are appended at the end of trained vocab
-        for idx, seq in enumerate(special_toks):
-            self.special_toks[seq] = vocab_size + idx
-
-        self.inverted_special_tokens = {
-            token: seq for seq, token in self.special_toks.items()
-        }
-
-        # rebuild vocab to include special tokens for decoding
-        for seq, tok in self.special_toks.items():
-            self.vocab[tok] = seq.encode("utf-8")
-        # Invalidate Rust tokenizer cache so new special tokens are visible.
-        self._tokenizer = None
+            raise VocabularyError("failed to decode") from e

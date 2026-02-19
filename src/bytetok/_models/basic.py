@@ -1,11 +1,11 @@
 """Basic byte-level tokenizer implementation."""
 
 from typing import override, TYPE_CHECKING
-from .base import ParallelMode, Tokenizer
+from .base import Tokenizer
 from .._decorators import measure_time
 import logging
 
-from ..errors import VocabularyError
+from ..errors import VocabularyError, TrainingError
 
 from ..types import Token
 from ..trainer import _train_bpe
@@ -68,10 +68,8 @@ class BasicTokenizer(Tokenizer):
                 f"(requested {n_merges}) stopping early"
             )
 
-        self.merges = result.merges  # used for encoding text -> tokens
-        self.vocab = result.vocab  # used for decoding tokens -> text
-        # Invalidate Rust caches since merges changed.
-        self._converter = None
+        self.merges = result.merges
+        self.vocab = result.vocab
         self._tokenizer = None
 
     @override
@@ -88,15 +86,13 @@ class BasicTokenizer(Tokenizer):
 
         :param text: Input text to encode.
         :param strategy: Ignored for this tokenizer.
-        :param num_workers: Ignored for single-text encoding.
         :returns: Encoded token sequence.
         """
-        # BasicTokenizer does not support special token strategies.
         _ = strategy
-        # BasicTokenizer does not use worker hints for single-text encoding.
-        _ = num_workers
         if not self.merges:
-            return list(text.encode("utf-8", errors="replace"))
+            raise TrainingError(
+                f"{self.__class__.__name__} must be trained before encoding"
+            )
         tokenizer = self._get_rust_tokenizer(pattern=r".+")
         return tokenizer.encode_bytes(text)
 
@@ -105,46 +101,26 @@ class BasicTokenizer(Tokenizer):
         self,
         texts: list[str],
         strategy: "SpecialTokenStrategy | None" = None,
-        num_workers: int | None = None,
-        parallel_mode: ParallelMode = ParallelMode.AUTO,
     ) -> list[list[Token]]:
         """
-        Encode multiple texts with optional batch-level parallel processing.
+        Encode multiple texts in parallel via Rust/Rayon.
 
         The ``strategy`` argument is ignored because this tokenizer does not
-        support special token handling. Parallelization happens across texts,
-        not within a single text because merges can span arbitrary byte boundaries
-        inside a single text. Hence, "chunk" mode falls back to "off".
+        support special token handling.
 
         :param texts: Text inputs to encode.
         :param strategy: Ignored for this tokenizer.
-        :param num_workers: Worker count for batch-level parallel mode.
-        :param parallel_mode: Batch parallelization mode selection.
         :returns: Encoded token sequences in input order.
         """
-        # BasicTokenizer does not support special token strategies.
         _ = strategy
-
-        # Worker hints are ignored because Rust batch methods handle parallelism internally.
-        _ = num_workers
+        if not self.merges:
+            raise TrainingError(
+                f"{self.__class__.__name__} must be trained before encoding"
+            )
         if not texts:
             return []
-        if not self.merges:
-            return [list(text.encode("utf-8", errors="replace")) for text in texts]
         tokenizer = self._get_rust_tokenizer(pattern=r".+")
-
-        match parallel_mode:
-            case ParallelMode.OFF:
-                return [tokenizer.encode_bytes(text) for text in texts]
-            case ParallelMode.BATCH:
-                return tokenizer.encode_bytes_batch(texts)
-            case ParallelMode.CHUNK:
-                # Chunk-mode is equivalent to serial full-text encoding for BasicTokenizer.
-                return [tokenizer.encode_bytes(text) for text in texts]
-            case ParallelMode.AUTO:
-                if len(texts) <= 1:
-                    return [tokenizer.encode_bytes(texts[0])]
-                return tokenizer.encode_bytes_batch(texts)
+        return tokenizer.encode_bytes_batch(texts)
 
     @override
     def decode(self, tokens: list[Token]) -> str:
@@ -153,13 +129,14 @@ class BasicTokenizer(Tokenizer):
 
         :param tokens: Token sequence to decode.
         :returns: Decoded text where invalid UTF-8 is replaced.
+        :raises TrainingError: If the tokenizer has not been trained yet.
         """
+        if not self.merges:
+            raise TrainingError(
+                f"{self.__class__.__name__} must be trained before decoding"
+            )
         tokenizer = self._get_rust_tokenizer(pattern=r".+")
         try:
             return tokenizer.decode_tokens(tokens, errors="replace")
         except ValueError as e:
             raise VocabularyError("token not found in vocabulary") from e
-
-    def _encode_one(self, text: str) -> list[Token]:
-        """Encode one text string through byte conversion and BPE merges."""
-        return self.encode(text)

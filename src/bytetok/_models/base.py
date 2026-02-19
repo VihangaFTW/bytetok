@@ -9,15 +9,15 @@ from pathlib import Path
 
 from .._sanitise import _render_bytes
 from ..types import Encoding, Token, Vocabulary
-from ..errors import ModelLoadError
+from ..errors import ModelLoadError, TrainingError, VocabularyError, SpecialTokenError
 
 if TYPE_CHECKING:
     from ..strategy import SpecialTokenStrategy
-    from ..bpe import  RustBPETokenizer
+    from ..bpe import RustBPETokenizer
 
 
 PREFIX: Final[str] = "ByteTok"
-VERSION: Final[str] = "0.1.0"
+VERSION: Final[str] = "0.2.0"
 MODEL_SUFFIX: Final[str] = ".model"
 VOCAB_SUFFIX: Final[str] = ".vocab"
 
@@ -76,7 +76,12 @@ class Tokenizer(ABC):
 
         :param file_prefix: Path prefix for output files.
         :param reg_pat: Optional regex pattern for text splitting.
+        :raises TrainingError: If the tokenizer has not been trained yet.
         """
+        if not self.merges:
+            raise TrainingError(
+                f"{self.__class__.__name__} must be trained before saving"
+            )
         log.info(f"saving tokenizer to {file_prefix}")
 
         # write merge pair -> merge token mappings for loading model in future
@@ -228,8 +233,9 @@ class Tokenizer(ABC):
         # mapping for special tokens: encode as UTF-8 bytes
         for seq, tok in self.special_toks.items():
             vocab[tok] = seq.encode("utf-8")
-        # mapping for new merged tokens
-        for (tok0, tok1), mtok in self.merges.items():
+        # mapping for new merged tokens — must be built in merge order so that
+        # child tokens (tok0, tok1) are always present before their parent (mtok).
+        for (tok0, tok1), mtok in sorted(self.merges.items(), key=lambda x: x[1]):
             vocab[mtok] = vocab[tok0] + vocab[tok1]
 
         log.debug(f"built vocabulary with {len(vocab)} tokens")
@@ -303,10 +309,48 @@ class Tokenizer(ABC):
                     # one of base 256 tokens: no merging
                     f.write(f"[{tok}] {subword}\n")
 
+    def set_special_tokens(self, special_toks: dict[str, Token]) -> None:
+        """
+        Replace the full set of special tokens with user-assigned IDs.
+
+        Replaces any previously registered special tokens. Must be called
+        after training. To extend existing tokens pass the merged dict:
+        ``tok.set_special_tokens({**tok.special_toks, "<|new|>": 300})``.
+
+        :param special_toks: Dictionary mapping token strings to integer IDs.
+        :raises TrainingError: If called before training.
+        :raises SpecialTokenError: If any two entries share the same ID.
+        :raises VocabularyError: If any ID collides with the BPE vocabulary.
+        """
+        if not self.merges:
+            raise TrainingError(
+                f"{self.__class__.__name__} must be trained before setting special tokens"
+            )
+
+        # IDs must be unique within the incoming dict.
+        ids = list(special_toks.values())
+        if len(ids) != len(set(ids)):
+            duplicates = {
+                seq for seq, tok in special_toks.items() if ids.count(tok) > 1
+            }
+            raise SpecialTokenError("duplicate token ids", found_tokens=duplicates)
+
+        # IDs must not collide with the BPE vocab (base 256 + merges).
+        bpe_vocab_size = 256 + len(self.merges)
+        for _, tok in special_toks.items():
+            if tok < bpe_vocab_size:
+                raise VocabularyError(
+                    "special token id overlaps with vocabulary", invalid_tok=tok
+                )
+
+        self.special_toks = dict(special_toks)
+        self.vocab = self._build_vocab()
+        # Invalidate so the next encode/decode call rebuilds with new special tokens.
+        self._tokenizer = None
+
     def _get_merge_history(self) -> list[tuple[tuple[int, int], int]]:
         """Return merge history sorted by merge token id."""
         return sorted(self.merges.items(), key=lambda x: x[1])
-
 
     def _get_rust_tokenizer(self, pattern: str | None = None) -> "RustBPETokenizer":
         """Build or return cached RustBPETokenizer."""
@@ -315,10 +359,9 @@ class Tokenizer(ABC):
 
             # fallback chain: use provided pattern, then self.pat, then r".+" (match entire input as one chunk)
             effective_pattern = pattern if pattern is not None else (self.pat or r".+")
-            special_tokens = list(self.special_toks.items())
             self._tokenizer = RustBPETokenizer(
                 self._get_merge_history(),
                 effective_pattern,
-                special_tokens,
+                self.special_toks,
             )
         return self._tokenizer

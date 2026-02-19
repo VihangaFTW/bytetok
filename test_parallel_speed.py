@@ -1,147 +1,147 @@
-"""Focused benchmark for ByteTok parallel encoding speed."""
+"""Benchmark encode_batch() and decode_tokens_batch() on a slice of the Sci-Fi Gutenberg dataset.
+
+Outputs a row matching the BENCHMARKS.MD table columns:
+  Corpus Size | Vocab Size | Training Time | Encoding Throughput |
+  Decoding Throughput | Compression Ratio | Size Reduction
+"""
 
 import argparse
-import os
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
+from datasets import load_dataset
+
 from bytetok import RegexTokenizer, from_pretrained
-from bytetok.parallel import encode_batch
+
+HF_DATASET = "stevez80/Sci-Fi-Books-gutenberg"
 
 
-def format_bytes(num_bytes: int) -> str:
-    """Format bytes into human-readable units."""
-    size = float(num_bytes)
-    for unit in ["B", "KB", "MB", "GB"]:
-        if size < 1024.0:
-            return f"{size:.2f} {unit}"
-        size /= 1024.0
-    return f"{size:.2f} TB"
+def load_corpus(num_docs: int | None) -> list[str]:
+    """Load up to `num_docs` documents in non-streaming mode for fair comparisons."""
+    print(f"Loading {HF_DATASET} (non-streaming) …")
+    ds = load_dataset(HF_DATASET, split="train")
+
+    docs: list[str] = []
+    for row in ds:
+        if not isinstance(row, Mapping):
+            continue
+        text_val = row.get("text") or row.get("content") or ""
+        if not isinstance(text_val, str) or not text_val:
+            continue
+        text = text_val
+        docs.append(text)
+        if num_docs and len(docs) >= num_docs:
+            break
+
+    return docs
 
 
-def make_text(target_mb: int) -> str:
-    """Build deterministic synthetic text close to target size."""
-    target_bytes = target_mb * 1024 * 1024
-    seed = (
-        "The wormhole shimmered above Titan while engines hummed in sync. "
-        "Captain Rao logged coordinates and the archive AI cross-checked stellar drift. "
-        "Quantum relays pulsed, translating static into maps for the next jump. "
-    )
-    repeat = max(1, target_bytes // len(seed.encode("utf-8")) + 1)
-    text = seed * repeat
-    while len(text.encode("utf-8")) > target_bytes:
-        text = text[:-1]
-    return text
-
-
-def split_docs(text: str, docs: int) -> list[str]:
-    """Split text into `docs` roughly equal parts."""
-    docs = max(1, docs)
-    step = max(1, len(text) // docs)
-    out = [text[i : i + step] for i in range(0, len(text), step)]
-    return [chunk for chunk in out if chunk]
-
-
-def measure(name: str, fn, total_chars: int, total_bytes: int) -> tuple[float, float]:
-    """Run one benchmark case and print throughput."""
+def train_tokenizer(train_text: str, vocab_size: int) -> tuple[RegexTokenizer, float]:
+    """Train a RegexTokenizer and return it along with elapsed training time in seconds."""
+    tok = RegexTokenizer()
     start = time.perf_counter()
-    _ = fn()
-    elapsed = time.perf_counter() - start
-    mbps = total_bytes / elapsed / (1024 * 1024)
-    cps = total_chars / elapsed
-    print(f"{name:<30} {elapsed:>10.3f}s  {mbps:>7.2f} MB/s  {cps:>12,.0f} chars/s")
-    return elapsed, mbps
+    tok.train(train_text, vocab_size=vocab_size, verbose=False)
+    return tok, time.perf_counter() - start
 
 
-def load_or_train(model_path: Path, train_text: str, vocab_size: int) -> RegexTokenizer:
-    """Load model if available, otherwise train a fresh tokenizer."""
-    if model_path.exists():
+def load_or_train(
+    model_path: Path | None, train_text: str, vocab_size: int
+) -> tuple[RegexTokenizer, float]:
+    """Return (tokenizer, training_seconds), loading from disk when requested."""
+    if model_path and model_path.exists():
         tok = from_pretrained(str(model_path))
         if isinstance(tok, RegexTokenizer):
-            return tok
-    tok = RegexTokenizer()
-    tok.train(train_text, vocab_size=vocab_size, verbose=False)
-    return tok
+            print(f"Loaded model from {model_path}")
+            return tok, 0.0
+    if model_path:
+        print(f"Model not found at {model_path}; training a new one.")
+    print(f"Training new model (vocab_size={vocab_size:,}) …")
+    return train_tokenizer(train_text, vocab_size)
 
 
 def main() -> None:
-    """Run focused parallel speed benchmark."""
-    parser = argparse.ArgumentParser(description="Benchmark ByteTok parallel speed.")
-    parser.add_argument("--size-mb", type=int, default=64, help="Synthetic corpus size.")
-    parser.add_argument("--docs", type=int, default=1000, help="Number of batch docs.")
+    """Run the encode/decode benchmark and print a BENCHMARKS.MD-compatible row."""
+    parser = argparse.ArgumentParser(
+        description="Benchmark ByteTok encode_batch() and decode_tokens_batch()."
+    )
     parser.add_argument(
-        "--workers",
+        "--num-docs",
         type=int,
-        default=20,
-        help="Worker count for parallel runs.",
+        default=None,
+        help="Number of documents to encode (default: full dataset).",
     )
     parser.add_argument(
         "--vocab-size",
         type=int,
         default=10_000,
-        help="Vocab size if training is needed.",
+        help="Vocab size for training (default: 10,000).",
     )
     parser.add_argument(
         "--model",
         type=str,
-        default="encoding.model",
-        help="Existing model path to load.",
+        default=None,
+        help="Optional existing .model path to load; default trains a fresh model.",
     )
     args = parser.parse_args()
 
-    text = make_text(args.size_mb)
-    docs = split_docs(text, args.docs)
-    text_bytes = len(text.encode("utf-8"))
-    print(f"Corpus size: {format_bytes(text_bytes)} ({len(text):,} chars)")
-    print(f"Docs: {len(docs):,}")
-    print(f"Workers: {args.workers}")
+    docs = load_corpus(args.num_docs)
+    if not docs:
+        raise RuntimeError("No documents loaded from dataset.")
 
-    model_path = Path(args.model)
-    print(f"Model source: {model_path}")
-    tokenizer = load_or_train(model_path, text[: min(len(text), 8 * 1024 * 1024)], args.vocab_size)
+    total_bytes = sum(len(d.encode("utf-8")) for d in docs)
+    corpus_mb = total_bytes / (1024 * 1024)
 
-    print("\n--- Single text encode ---")
-    t1, _ = measure(
-        "single encode workers=1",
-        lambda: tokenizer.encode(text, num_workers=1),
-        len(text),
-        text_bytes,
-    )
-    tN, _ = measure(
-        f"single encode workers={args.workers}",
-        lambda: tokenizer.encode(text, num_workers=args.workers),
-        len(text),
-        text_bytes,
-    )
-    print(f"single speedup: {t1 / tN:.2f}x")
+    # Train on the full selected corpus to match old benchmark methodology.
+    train_text = "".join(docs)
+    model_path = Path(args.model) if args.model else None
+    tokenizer, train_secs = load_or_train(model_path, train_text, args.vocab_size)
 
-    total_batch_chars = sum(len(d) for d in docs)
-    total_batch_bytes = sum(len(d.encode("utf-8")) for d in docs)
-    print("\n--- Batch encode ---")
-    toff, _ = measure(
-        "batch mode=off workers=1",
-        lambda: encode_batch(
-            tokenizer,
-            docs,
-            num_workers=1,
-            parallel_mode="off",
-        ),
-        total_batch_chars,
-        total_batch_bytes,
+    # --- Encoding ---
+    t0 = time.perf_counter()
+    encoded: list[list[int]] = tokenizer.encode_batch(docs)
+    encode_elapsed = time.perf_counter() - t0
+    encode_mbps = total_bytes / encode_elapsed / (1024 * 1024)
+
+    # --- Decoding (uses the same Rayon-backed batch path as decode internally) ---
+    rust_tok = tokenizer._get_rust_tokenizer(pattern=tokenizer.pat)
+    t0 = time.perf_counter()
+    rust_tok.decode_tokens_batch(encoded, errors="replace")
+    decode_elapsed = time.perf_counter() - t0
+    total_tokens = sum(len(seq) for seq in encoded)
+    decode_mtps = total_tokens / decode_elapsed / 1_000_000
+
+    # --- Compression stats ---
+    compression_ratio = total_bytes / total_tokens
+    size_reduction = (1 - 1 / compression_ratio) * 100
+
+    # Training time: display as mins if >= 60 s, else as secs.
+    if train_secs >= 60:
+        train_str = f"{train_secs / 60:.2f} mins"
+    else:
+        train_str = f"{train_secs:.1f} secs"
+
+    # --- Output ---
+    print()
+    header = (
+        f"| {'Corpus Size':22} | {'Vocab Size':10} | {'Training Time':18} "
+        f"| {'Encoding Throughput':29} | {'Decoding Throughput':19} "
+        f"| {'Compression Ratio':17} | {'Size Reduction':14} |"
     )
-    tauto, auto_mbps = measure(
-        f"batch mode=auto workers={args.workers}",
-        lambda: encode_batch(
-            tokenizer,
-            docs,
-            num_workers=args.workers,
-            parallel_mode="auto",
-        ),
-        total_batch_chars,
-        total_batch_bytes,
+    sep = (
+        f"| {'-' * 22} | {'-' * 10} | {'-' * 18} "
+        f"| {'-' * 29} | {'-' * 19} "
+        f"| {'-' * 17} | {'-' * 14} |"
     )
-    print(f"auto vs off speedup: {toff / tauto:.2f}x")
-    print(f"\nParallel auto throughput: {auto_mbps:.2f} MB/s")
+    row = (
+        f"| {f'{corpus_mb:.2f} MB':22} | {args.vocab_size:10,} | {train_str:18} "
+        f"| {f'{encode_mbps:.2f} MB/sec':29} | {f'{decode_mtps:.1f}M tokens/sec':19} "
+        f"| {f'{compression_ratio:.2f}x':17} | {f'{size_reduction:.1f}%':14} |"
+    )
+    print(header)
+    print(sep)
+    print(row)
+    print()
 
 
 if __name__ == "__main__":

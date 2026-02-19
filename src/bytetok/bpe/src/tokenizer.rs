@@ -419,6 +419,8 @@ impl BPETokenizer {
         text: &str,
         allowed_special: &HashMap<String, Token>,
     ) -> Result<Vec<(String, Option<Token>)>, EncodeError> {
+        // escape regex metachars in special tokens to avoid
+        // undesired pattern match behavior.
         let pattern = allowed_special
             .keys()
             .map(|s| fancy_regex::escape(s))
@@ -437,14 +439,15 @@ impl BPETokenizer {
             // guard against empty normal segments when text starts with a
             // special token or contains two consecutive special tokens.
             if mat.start() > segment_start {
+                // push normal segemnt first to preserve ordering
                 segments.push((text[segment_start..mat.start()].to_string(), None));
             }
-
+            // push special segment
             let special_str = mat.as_str();
             segments.push((special_str.to_string(), Some(allowed_special[special_str])));
             segment_start = mat.end();
         }
-
+        // add normal segment after last special token
         if segment_start < text.len() {
             segments.push((text[segment_start..].to_string(), None));
         }
