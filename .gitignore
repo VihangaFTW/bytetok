@@ -76,6 +76,6 @@ temp/
 *.model
 *.vocab
 
+# benchmark cache
+.bench_cache/
 
-# benchmarking script
-test_training.py

@@ -13,6 +13,7 @@ log = logging.getLogger(__name__)
 
 # special token handling strategies
 
+
 class SpecialTokenStrategy(ABC):
     """Base strategy for handling special tokens during encoding."""
 
@@ -108,7 +109,13 @@ def get_strategy(
 def get_strategy(
     name: StrategyName = "none-raise", allowed_subset: set[str] | None = None
 ) -> SpecialTokenStrategy:
-    """Create a special token strategy by name."""
+    """
+    Create a special token strategy by name.
+
+    :param name: Strategy identifier — "all", "none", "none-raise", or "custom".
+    :param allowed_subset: Required for "custom"; tokens allowed during encoding.
+    :raises StrategyError: If name is unknown or allowed_subset is missing for custom.
+    """
     if name not in _SPECIAL_TOKEN_STRATEGIES:
         raise StrategyError(
             "unknown strategy name",

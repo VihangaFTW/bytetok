@@ -8,7 +8,7 @@ import logging
 from ..errors import VocabularyError, TrainingError
 
 from ..types import Token
-from ..trainer import _train_bpe
+from .._trainer import _train_bpe
 
 # need only classname for type annotation
 if TYPE_CHECKING:
@@ -18,9 +18,7 @@ log = logging.getLogger(__name__)
 
 
 class BasicTokenizer(Tokenizer):
-    """
-    Tokenizer that operates directly on byte sequences without regex splitting
-    """
+    """Tokenizer that operates directly on byte sequences without regex splitting."""
 
     TOKENIZER_TYPE = "basic"
 
@@ -34,14 +32,11 @@ class BasicTokenizer(Tokenizer):
         self, text: str | list[str], vocab_size: int, verbose: bool = False
     ) -> None:
         """
-        Train the tokenizer on raw text using byte-level BPE.
+        Train on raw text using byte-level BPE.
 
-        This implementation concatenates list inputs, encodes text as UTF-8
-        bytes, and learns ``vocab_size - 256`` merges on top of the base byte
-        vocabulary.
+        Concatenates list inputs, encodes as UTF-8 bytes, and learns
+        ``vocab_size - 256`` merges on top of the base byte vocabulary.
 
-        :param text: Training text as a single string or list of strings.
-        :param vocab_size: Target vocabulary size including the base 256 bytes.
         :param verbose: Log each learned merge when ``True``.
         :raises VocabularyError: If ``vocab_size`` is less than or equal to 256.
         :raises TrainingError: If the encoded training sequence is empty.
@@ -81,12 +76,8 @@ class BasicTokenizer(Tokenizer):
         """
         Encode text into tokens using byte-level BPE.
 
-        The ``strategy`` argument is ignored because this tokenizer does not
-        support special token handling.
-
-        :param text: Input text to encode.
-        :param strategy: Ignored for this tokenizer.
-        :returns: Encoded token sequence.
+        The ``strategy`` argument is ignored; this tokenizer does not support
+        special token handling.
         """
         _ = strategy
         if not self.merges:
@@ -105,12 +96,8 @@ class BasicTokenizer(Tokenizer):
         """
         Encode multiple texts in parallel via Rust/Rayon.
 
-        The ``strategy`` argument is ignored because this tokenizer does not
-        support special token handling.
-
-        :param texts: Text inputs to encode.
-        :param strategy: Ignored for this tokenizer.
-        :returns: Encoded token sequences in input order.
+        The ``strategy`` argument is ignored; this tokenizer does not support
+        special token handling.
         """
         _ = strategy
         if not self.merges:
@@ -121,22 +108,3 @@ class BasicTokenizer(Tokenizer):
             return []
         tokenizer = self._get_rust_tokenizer(pattern=r".+")
         return tokenizer.encode_bytes_batch(texts)
-
-    @override
-    def decode(self, tokens: list[Token]) -> str:
-        """
-        Decode tokens into UTF-8 text.
-
-        :param tokens: Token sequence to decode.
-        :returns: Decoded text where invalid UTF-8 is replaced.
-        :raises TrainingError: If the tokenizer has not been trained yet.
-        """
-        if not self.merges:
-            raise TrainingError(
-                f"{self.__class__.__name__} must be trained before decoding"
-            )
-        tokenizer = self._get_rust_tokenizer(pattern=r".+")
-        try:
-            return tokenizer.decode_tokens(tokens, errors="replace")
-        except ValueError as e:
-            raise VocabularyError("token not found in vocabulary") from e

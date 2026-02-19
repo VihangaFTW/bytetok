@@ -13,7 +13,7 @@ class SpecialTokenError(ByteTokError):
     """Raised when special token handling fails."""
 
     def __init__(self, message: str, *, found_tokens: set[str] | None = None) -> None:
-        """Initialize with optional found_tokens that get appended to the message."""
+        """Append found token names to the message when provided."""
         if found_tokens:
             message = f"{message} (found: {', '.join(sorted(found_tokens))})"
         super().__init__(message)
@@ -30,7 +30,7 @@ class TokenizationError(ByteTokError):
         position: int | None = None,
         input_text: str | None = None,
     ) -> None:
-        """Capture optional context about where tokenization failed."""
+        """Attach position and input text context when provided."""
         super().__init__(message)
         self.position = position
         self.input_text = input_text
@@ -46,7 +46,7 @@ class VocabularyError(ByteTokError):
         vocab_size: int | None = None,
         invalid_tok: Token | None = None,
     ) -> None:
-        """Initialize with optional token and vocab_size that get appended to the message."""
+        """Append token and vocab_size details to the message when provided."""
         extra = " "
         # training: vocab size <= 256
         if vocab_size:
@@ -63,7 +63,7 @@ class TrainingError(ByteTokError):
     """Raised when tokenizer training fails."""
 
     def __init__(self, message: str, *, vocab_size: int = 0) -> None:
-        """Initialize with target vocabulary size."""
+        """Attach target vocabulary size to the message."""
         super().__init__(message)
         self.vocab_size = vocab_size
 
@@ -79,7 +79,7 @@ class ModelLoadError(ByteTokError):
         version_mismatch: tuple[str, list[str]] | None = None,
         type_mismatch: tuple[str, list[str]] | None = None,
     ) -> None:
-        """Attach model path and mismatch details to the error message."""
+        """Append model path and version/type mismatch details to the message."""
         extra = " "
         if model_path:
             extra += f"(path: {model_path}) "
@@ -102,13 +102,7 @@ class PatternError(ByteTokError):
         pattern: str | None = None,
         regex_err: re.error | None = None,
     ) -> None:
-        """
-        Initialize PatternError with pattern details.
-
-        :param message: Error message.
-        :param pattern: The regex pattern that failed.
-        :param regex_err: The underlying regex error from the regex library.
-        """
+        """Attach pattern and underlying regex error details to the message."""
         extra = " "
         if pattern:
             extra += f"(pattern: {pattern!r}) "
@@ -129,7 +123,7 @@ class StrategyError(ByteTokError):
         invalid_name: str | None = None,
         available_strats: list[str] | None = None,
     ) -> None:
-        """Initialize with optional invalid strategy name and available strategies."""
+        """Append invalid strategy name and available alternatives to the message."""
         extra = " "
         if invalid_name:
             extra += f"(available: {available_strats}) (got {invalid_name}) "

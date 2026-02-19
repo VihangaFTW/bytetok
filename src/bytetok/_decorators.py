@@ -13,7 +13,6 @@ def measure_time(func: Callable) -> Callable:
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        """Call ``func`` and always log elapsed time."""
         start = time.perf_counter()
         try:
             # call decorated func with its normal arguments

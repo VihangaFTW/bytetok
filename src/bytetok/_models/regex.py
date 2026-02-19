@@ -13,7 +13,7 @@ from .._decorators import measure_time
 from ..types import (
     Token,
 )
-from ..trainer import _train_bpe
+from .._trainer import _train_bpe
 
 
 from .base import Tokenizer
@@ -38,7 +38,7 @@ class RegexTokenizer(Tokenizer):
 
     @override
     def load(self, model_filename: str) -> None:
-        """Load tokenizer state and refresh regex/special-token caches."""
+        """Load tokenizer state; delegates to base and updates internal state."""
         super().load(model_filename)
 
     @override
@@ -47,13 +47,11 @@ class RegexTokenizer(Tokenizer):
         self, text: str | list[str], vocab_size: int, verbose: bool = False
     ) -> None:
         """
-        Train the tokenizer on regex-split text chunks.
+        Train on regex-split text chunks.
 
-        Input text is first segmented by the configured regex pattern, then
-        flattened into UTF-8 byte tokens and used for BPE merge learning.
+        Input is segmented by the configured pattern, then flattened into
+        UTF-8 byte tokens for BPE merge learning.
 
-        :param text: Training text as a single string or list of strings.
-        :param vocab_size: Target vocabulary size including the base 256 bytes.
         :param verbose: Log each learned merge when ``True``.
         :raises VocabularyError: If ``vocab_size`` is less than or equal to 256.
         :raises TrainingError: If no trainable byte tokens are produced.
@@ -97,13 +95,11 @@ class RegexTokenizer(Tokenizer):
         """
         Encode text into a sequence of tokens.
 
-        If ``strategy`` is ``None``, the tokenizer only applies regex chunking
-        and BPE. When a strategy is provided, matched special tokens are kept as
-        atomic tokens while non-special spans are encoded with BPE.
+        If ``strategy`` is ``None``, applies regex chunking and BPE only.
+        Otherwise, matched special tokens are kept atomic; non-special spans
+        are encoded with BPE.
 
-        :param text: Text to encode.
-        :param strategy: Strategy used to select allowed special tokens.
-        :returns: Encoded token sequence.
+        :param strategy: Strategy to select allowed special tokens.
         :raises TrainingError: If the tokenizer has not been trained yet.
         :raises TokenizationError: If encoding fails.
         """
@@ -138,9 +134,7 @@ class RegexTokenizer(Tokenizer):
         """
         Encode many texts in parallel via Rust/Rayon.
 
-        :param texts: Text inputs to encode.
         :param strategy: Optional special token handling strategy.
-        :returns: Encoded token sequences in input order.
         :raises TrainingError: If the tokenizer has not been trained yet.
         :raises TokenizationError: If encoding fails.
         """
@@ -174,23 +168,3 @@ class RegexTokenizer(Tokenizer):
             return tokenizer.encode_texts_with_special(texts, allowed_special)
         except ValueError as e:
             raise TokenizationError("failed to encode texts") from e
-
-    @override
-    def decode(self, tokens: list[Token]) -> str:
-        """
-        Decode tokens into text, including registered special tokens.
-
-        :param tokens: Token sequence to decode.
-        :returns: Decoded text where invalid UTF-8 is replaced.
-        :raises TrainingError: If the tokenizer has not been trained yet.
-        :raises VocabularyError: If any token ID is not in the vocabulary.
-        """
-        if not self.merges:
-            raise TrainingError(
-                f"{self.__class__.__name__} must be trained before decoding"
-            )
-        tokenizer = self._get_rust_tokenizer(pattern=self.pat)
-        try:
-            return tokenizer.decode_tokens(tokens, errors="replace")
-        except ValueError as e:
-            raise VocabularyError("failed to decode") from e

@@ -62,10 +62,27 @@ class Tokenizer(ABC):
         """Encode text into a sequence of tokens."""
         ...
 
-    @abstractmethod
-    def decode(self, tokens: list[Token]) -> str:
-        """Decode a sequence of tokens back into text."""
-        ...
+    def decode(self, tokens: list[Token], errors: str | None = None) -> str:
+        """
+        Decode a sequence of tokens back into text.
+
+        :param errors: How to handle invalid UTF-8 — "strict" or "replace" (default: "replace").
+        :raises TrainingError: If the tokenizer has not been trained yet.
+        :raises VocabularyError: If any token ID is not in the vocabulary.
+        """
+        if not self.merges:
+            raise TrainingError(
+                f"{self.__class__.__name__} must be trained before decoding"
+            )
+        tokenizer = self._get_rust_tokenizer(pattern=self._get_pattern())
+        try:
+            return tokenizer.decode_tokens(tokens, errors=errors)
+        except ValueError as e:
+            raise VocabularyError("failed to decode") from e
+
+    def vocab_size(self) -> int:
+        """Return the number of tokens in the vocabulary."""
+        return len(self.vocab)
 
     def save(self, file_prefix: str, reg_pat: str = "") -> None:
         """
@@ -212,21 +229,41 @@ class Tokenizer(ABC):
         texts: list[str],
         strategy: "SpecialTokenStrategy | None" = None,
     ) -> list[list[Token]]:
-        """
-        Encode multiple texts into sequences of tokens in batch.
-
-        :param texts: List of text strings to encode.
-        :param strategy: Strategy to handle special tokens in texts.
-        :return: List of token sequences, one for each input text.
-        """
+        """Encode multiple texts into sequences of tokens in batch."""
         ...
+
+    def _get_pattern(self) -> str:
+        """Return the regex pattern for encoding/decoding; default is r'.+' (match all)."""
+        return self.pat or r".+"
+
+    def decode_batch(
+        self, token_batch: list[list[Token]], errors: str | None = None
+    ) -> list[str]:
+        """
+        Decode multiple token sequences in batch via Rust/Rayon.
+
+        :param errors: How to handle invalid UTF-8 — "strict" or "replace" (default: "replace").
+        :raises TrainingError: If the tokenizer has not been trained yet.
+        :raises VocabularyError: If any token ID is not in the vocabulary.
+        """
+        if not self.merges:
+            raise TrainingError(
+                f"{self.__class__.__name__} must be trained before decoding"
+            )
+        if not token_batch:
+            return []
+        tokenizer = self._get_rust_tokenizer(pattern=self._get_pattern())
+        try:
+            return tokenizer.decode_tokens_batch(token_batch, errors=errors)
+        except ValueError as e:
+            raise VocabularyError("failed to decode") from e
 
     def _build_vocab(self) -> Vocabulary:
         """
         Build token-to-bytes vocabulary mapping.
 
-        Creates base 256 byte tokens, adds special tokens as UTF-8 bytes,
-        and expands with merged tokens in order.
+        Adds base 256 byte tokens, special tokens as UTF-8 bytes, then merged
+        tokens in merge order so child tokens exist before their parent.
         """
         # mapping for base 256 tokens
         vocab = {btok: bytes([btok]) for btok in range(256)}
@@ -242,7 +279,7 @@ class Tokenizer(ABC):
         return vocab
 
     def _save_model(self, file_prefix: str, reg_pat: str = "") -> None:
-        """Save merge mappings and special tokens to .model file."""
+        """Persist merge mappings and special tokens to a .model file."""
 
         model_path = Path(file_prefix).with_suffix(MODEL_SUFFIX)
         # create directory if does not exist
@@ -275,7 +312,7 @@ class Tokenizer(ABC):
                 f.write(f"{pair[0]} {pair[1]} {mtok}\n")
 
     def _save_vocab(self, file_prefix: str) -> None:
-        """Save human readable token representations to .vocab file."""
+        """Persist human-readable token representations to a .vocab file."""
         vocab_path = Path(file_prefix).with_suffix(VOCAB_SUFFIX)
         vocab_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -349,11 +386,11 @@ class Tokenizer(ABC):
         self._tokenizer = None
 
     def _get_merge_history(self) -> list[tuple[tuple[int, int], int]]:
-        """Return merge history sorted by merge token id."""
+        """Return merge history sorted by merge token id (child pairs before parents)."""
         return sorted(self.merges.items(), key=lambda x: x[1])
 
     def _get_rust_tokenizer(self, pattern: str | None = None) -> "RustBPETokenizer":
-        """Build or return cached RustBPETokenizer."""
+        """Build or return the cached Rust tokenizer for encode/decode."""
         if self._tokenizer is None:
             from bytetok.bpe import RustBPETokenizer
 

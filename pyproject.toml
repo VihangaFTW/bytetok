@@ -6,15 +6,13 @@ readme = "README.md"
 license = { text = "MIT" }
 classifiers = [
     "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
 ]
 authors = [{ name = "Vihanga Malaviarachchi" }]
-requires-python = ">=3.13"
-dependencies = [
-    "datasets>=4.5.0",
-    "regex",
-]
+requires-python = ">=3.12"
+dependencies = ["regex"]
 
 keywords = ["bpe", "tokenizer", "nlp", "byte-pair-encoding"]
 
@@ -37,4 +35,4 @@ python-source = "src"
 module-name = "bytetok._bpe_rs"
 
 [dependency-groups]
-dev = ["maturin>=1.11.5"]
+dev = ["maturin>=1.11.5", "matplotlib", "pytest"]

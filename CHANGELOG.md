@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-02-20
+
+### Added
+
+- Parallel processing pipeline for encode and decode
+
+### Changed
+
+- Ported majority of encode and decode logic to Rust
+- Simplified Python API architecture
+- Improved encoding and decoding performance across single-text, batch, and special-token workloads (~5–6× faster than v0.1.2 on batch encode/decode)
+- Special tokens now accept user-defined IDs, with error handling for duplicates and overwrites
+- Updated tokenizer version from `0.1.0` to `0.2.0` for consistency with the package version.
+
+![Benchmark comparison](assets/v0-2-0_bench.png)
+
 ## [0.1.2] - 2026-02-07
 
 ### Fixed

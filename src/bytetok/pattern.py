@@ -95,10 +95,9 @@ class TokenPattern(str, Enum):
         r"\p{N}+"
     )
 
-
     @classmethod
     def get(cls, name: str) -> str:
-        """Get patterns by name (case-insensitive)."""
+        """Return the pattern string by name (case-insensitive)."""
         try:
             return cls[name.upper().replace("-", "_")].value
         except KeyError:
@@ -114,7 +113,7 @@ def list_patterns() -> list[str]:
 
 
 def get_pattern(name: Pattern) -> str:
-    """Get a built-in pattern string by name."""
+    """Return a built-in pattern string by name."""
     return TokenPattern.get(name)
 
 

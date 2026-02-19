@@ -38,21 +38,10 @@ impl BPETokenizer {
     /// * `merge_history` - BPE merge rules as ((left, right), merged_token).
     ///   Order determines merge priority (earlier = higher priority).
     /// * `pattern` - Regex pattern string used to split text into chunks.
-    ///   Must be compatible with `fancy_regex` (supports lookaheads/lookbehinds
-    ///   but NOT possessive quantifiers like `?+` or `++`).
     ///
     /// # Errors
     ///
     /// Returns an error if the regex pattern fails to compile.
-    ///
-    /// # Compatibility note
-    ///
-    /// Patterns using possessive quantifiers such as GPT-4 with its `?+` and `++`
-    /// must be converted to atomic groups before passing here:
-    ///   - `X?+` → `(?>X?)`
-    ///   - `X++` → `(?>X+)`
-    ///   - `X*+` → `(?>X*)`
-    ///
     pub(crate) fn new(
         merge_history: impl IntoIterator<Item = ((Token, Token), Token)>,
         pattern: &str,
@@ -61,10 +50,7 @@ impl BPETokenizer {
         let converter = BPEConverter::new(merge_history, &special_tokens)?;
         let pattern = Regex::new(pattern)?;
 
-        Ok(Self {
-            converter,
-            pattern,
-        })
+        Ok(Self { converter, pattern })
     }
 
     /// Encode a full text string: regex split → bytes → BPE.
@@ -265,7 +251,13 @@ impl BPETokenizer {
         let flattened_normal_segs: Vec<&str> = split_segments
             .iter()
             .flat_map(|split| split.iter())
-            .filter_map(|(seg, id)| if id.is_none() { Some(seg.as_str()) } else { None })
+            .filter_map(|(seg, id)| {
+                if id.is_none() {
+                    Some(seg.as_str())
+                } else {
+                    None
+                }
+            })
             .collect();
 
         // encode every normal segment in one parallel Rayon batch.
@@ -427,8 +419,7 @@ impl BPETokenizer {
             .collect::<Vec<_>>()
             .join("|");
 
-        let re = Regex::new(&pattern)
-            .map_err(|e| EncodeError::RegexMatch(e.to_string()))?;
+        let re = Regex::new(&pattern).map_err(|e| EncodeError::RegexMatch(e.to_string()))?;
 
         let mut segments: Vec<(String, Option<Token>)> = Vec::new();
         let mut segment_start = 0;

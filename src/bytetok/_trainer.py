@@ -29,14 +29,9 @@ def _train_bpe(
     tokens: list[Token], n_merges: int, verbose: bool = False
 ) -> BPETrainingResult:
     """
-    Train BPE on a sequence of tokens.
+    Train BPE on a sequence of tokens via the Rust implementation.
 
-    Trained using a fast Rust implementation.
-
-    :param tokens: Sequence of token IDs (typically bytes 0-255).
-    :param n_merges: Number of merge operations to learn.
-    :param verbose: Whether to log merge operations.
-    :return: Training results containing merges and vocabulary.
+    :param verbose: Log each merge operation when ``True``.
     """
     if len(tokens) == 0:
         raise TrainingError("empty token sequence, no training performed")
@@ -68,3 +63,6 @@ def _train_bpe(
         merges=merges,
         n_merges_completed=len(merge_history),
     )
+
+
+__all__ = ["_train_bpe"]

@@ -37,19 +37,10 @@ def get_tokenizer(
     """
     Create a tokenizer with a built-in or custom regex pattern.
 
-    :param pattern: Built-in pattern name (e.g., "gpt2", "gpt4o", "llama3").
-                    Ignored if custom_pattern is provided.
-    :param custom_pattern: Custom regex pattern string. Overrides pattern parameter.
-    :return: Configured tokenizer instance.
+    :param pattern: Built-in pattern name (e.g. "gpt2", "gpt4o", "llama3");
+                    ignored if custom_pattern is provided.
+    :param custom_pattern: Custom regex pattern string; overrides pattern when provided.
     :raises PatternError: If custom_pattern is invalid regex.
-
-    .. code-block:: python
-
-        # Use built-in pattern
-        tokenizer = get_tokenizer("gpt4o")
-
-        # Use custom pattern
-        tokenizer = get_tokenizer(custom_pattern=r"'s|'t|'re|'ve|'m|'ll|'d")
     """
     # regex class initializer handles invalid custom patterns
     if custom_pattern is not None:
@@ -83,18 +74,12 @@ def from_pretrained(model_path: str) -> Tokenizer:
     """
     Load a pre-trained tokenizer from disk.
 
-    Automatically detects tokenizer type from
-    the model file header and loads the appropriate implementation.
+    Detects tokenizer type from the model file header and instantiates the
+    appropriate implementation.
 
     :param model_path: Path to the .model file.
-    :return: Loaded tokenizer instance with vocabulary and configuration.
-    :raises ModelLoadError: If file doesn't exist, has wrong extension, or contains
-                            unknown tokenizer type.
-
-    .. code-block:: python
-
-        tokenizer = from_pretrained("path/to/model.model")
-        tokens = tokenizer.encode("Hello world")
+    :raises ModelLoadError: If file does not exist, has wrong extension,
+                            or contains unknown tokenizer type.
     """
     # extract model type from file
     tok_type = _detect_tokenizer_type(model_path)
