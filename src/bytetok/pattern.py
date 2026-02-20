@@ -1,6 +1,19 @@
+"""Built-in regex pattern definitions for supported model families."""
+
 from enum import Enum
+from typing import Literal
 
 from .errors import PatternError
+
+Pattern = Literal[
+    "gpt2",
+    "gpt4",
+    "gpt4o",
+    "llama3",
+    "qwen2",
+    "deepseek-coder",
+    "deepseek-llm",
+]
 
 
 class TokenPattern(str, Enum):
@@ -82,30 +95,26 @@ class TokenPattern(str, Enum):
         r"\p{N}+"
     )
 
-    # coding-focused models
-    STARCODER = (
-        r"\p{N}|"
-        r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|"
-        r"\s+(?!\S)"
-    )
-
-    FALCON = (
-        r"[\p{P}\$\+<=>^\~\|`]+|"
-        r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|"
-        r"\s+(?!\S)|"
-        r"[0-9][0-9][0-9]"
-    )
-
-    # multilingual models
-    BLOOM = r" ?[^(\s|.,!?…。，、।۔،)]+"
-
     @classmethod
     def get(cls, name: str) -> str:
-        """Get patterns by name (case-insensitive)."""
+        """Return the pattern string by name (case-insensitive)."""
         try:
             return cls[name.upper().replace("-", "_")].value
         except KeyError:
             raise PatternError(
-                f"Unknown pattern: {name!r}. "
-                f"Valid patterns: {', '.join(pat.name for pat in cls)}"
+                f"unknown pattern: {name!r} "
+                f"valid patterns: {', '.join(pat.name for pat in cls)}"
             )
+
+
+def list_patterns() -> list[str]:
+    """Return names of all available built-in tokenization patterns."""
+    return [pat.name for pat in TokenPattern]
+
+
+def get_pattern(name: Pattern) -> str:
+    """Return a built-in pattern string by name."""
+    return TokenPattern.get(name)
+
+
+__all__ = ["Pattern", "TokenPattern", "list_patterns", "get_pattern"]

@@ -2,21 +2,22 @@
 Base tokenizer interface for byte-level tokenization implementations.
 """
 
-from abc import ABC, abstractmethod
-from warnings import deprecated
-from .._bpe import Encoding, Token, TokenPair, Vocabulary, slow_bpe_merge
-from .._sanitise import render_bytes
-from pathlib import Path
-from typing import Final, TYPE_CHECKING
-from ..errors import ModelLoadError
 import logging
+from abc import ABC, abstractmethod
+from typing import Final, TYPE_CHECKING
+from pathlib import Path
+
+from .._sanitise import _render_bytes
+from ..types import Encoding, Token, Vocabulary
+from ..errors import ModelLoadError, TrainingError, VocabularyError, SpecialTokenError
 
 if TYPE_CHECKING:
     from ..strategy import SpecialTokenStrategy
-    from ..bpe import RustBPEEncoder
+    from ..bpe import RustBPETokenizer
+
 
 PREFIX: Final[str] = "ByteTok"
-VERSION: Final[str] = "0.1.0"
+VERSION: Final[str] = "0.2.0"
 MODEL_SUFFIX: Final[str] = ".model"
 VOCAB_SUFFIX: Final[str] = ".vocab"
 
@@ -42,8 +43,8 @@ class Tokenizer(ABC):
         self.special_toks: dict[str, Token] = {}
         # tokens -> bytes
         self.vocab: Vocabulary = self._build_vocab()
-        # cached Rust encoder for fast BPE
-        self._encoder: "RustBPEEncoder | None" = None
+        # cached Rust tokenizer for full encode/decode pipeline
+        self._tokenizer: "RustBPETokenizer | None" = None
 
     @abstractmethod
     def train(
@@ -54,15 +55,34 @@ class Tokenizer(ABC):
 
     @abstractmethod
     def encode(
-        self, text: str, strategy: "SpecialTokenStrategy | None" = None
+        self,
+        text: str,
+        strategy: "SpecialTokenStrategy | None" = None,
     ) -> list[Token]:
         """Encode text into a sequence of tokens."""
         ...
 
-    @abstractmethod
-    def decode(self, tokens: list[Token]) -> str:
-        """Decode a sequence of tokens back into text."""
-        ...
+    def decode(self, tokens: list[Token], errors: str | None = None) -> str:
+        """
+        Decode a sequence of tokens back into text.
+
+        :param errors: How to handle invalid UTF-8 — "strict" or "replace" (default: "replace").
+        :raises TrainingError: If the tokenizer has not been trained yet.
+        :raises VocabularyError: If any token ID is not in the vocabulary.
+        """
+        if not self.merges:
+            raise TrainingError(
+                f"{self.__class__.__name__} must be trained before decoding"
+            )
+        tokenizer = self._get_rust_tokenizer(pattern=self._get_pattern())
+        try:
+            return tokenizer.decode_tokens(tokens, errors=errors)
+        except ValueError as e:
+            raise VocabularyError("failed to decode") from e
+
+    def vocab_size(self) -> int:
+        """Return the number of tokens in the vocabulary."""
+        return len(self.vocab)
 
     def save(self, file_prefix: str, reg_pat: str = "") -> None:
         """
@@ -73,7 +93,12 @@ class Tokenizer(ABC):
 
         :param file_prefix: Path prefix for output files.
         :param reg_pat: Optional regex pattern for text splitting.
+        :raises TrainingError: If the tokenizer has not been trained yet.
         """
+        if not self.merges:
+            raise TrainingError(
+                f"{self.__class__.__name__} must be trained before saving"
+            )
         log.info(f"saving tokenizer to {file_prefix}")
 
         # write merge pair -> merge token mappings for loading model in future
@@ -146,7 +171,7 @@ class Tokenizer(ABC):
             except ValueError:
                 raise ModelLoadError(f"invalid special token count: {n_special_tokens}")
 
-            log.debug(f"loading {n_special_tokens} special tokens...")
+            log.debug(f"loading {n_special_tokens} special tokens")
 
             count = 0
             while count < n_special_tokens:
@@ -174,7 +199,7 @@ class Tokenizer(ABC):
             log.debug(f"{n_special_tokens} special tokens loaded")
 
             # read and load merges
-            log.debug("loading merge tokens...")
+            log.debug("loading merge tokens")
             for line in f:
                 try:
                     # tokens are stored as strings in file
@@ -191,34 +216,70 @@ class Tokenizer(ABC):
         self.special_toks = special_toks
         self.merges = merges
         self.vocab = self._build_vocab()
-        # invalidate encoder cache since merges changed
-        self._encoder = None
+        # Invalidate tokenizer cache since model state changed
+        self._tokenizer = None
 
         log.info(
             f"model loaded successfully: {len(self.special_toks)} special tokens, {len(self.merges)} merge rules, {len(self.vocab)} total tokens"
         )
 
+    @abstractmethod
+    def encode_batch(
+        self,
+        texts: list[str],
+        strategy: "SpecialTokenStrategy | None" = None,
+    ) -> list[list[Token]]:
+        """Encode multiple texts into sequences of tokens in batch."""
+        ...
+
+    def _get_pattern(self) -> str:
+        """Return the regex pattern for encoding/decoding; default is r'.+' (match all)."""
+        return self.pat or r".+"
+
+    def decode_batch(
+        self, token_batch: list[list[Token]], errors: str | None = None
+    ) -> list[str]:
+        """
+        Decode multiple token sequences in batch via Rust/Rayon.
+
+        :param errors: How to handle invalid UTF-8 — "strict" or "replace" (default: "replace").
+        :raises TrainingError: If the tokenizer has not been trained yet.
+        :raises VocabularyError: If any token ID is not in the vocabulary.
+        """
+        if not self.merges:
+            raise TrainingError(
+                f"{self.__class__.__name__} must be trained before decoding"
+            )
+        if not token_batch:
+            return []
+        tokenizer = self._get_rust_tokenizer(pattern=self._get_pattern())
+        try:
+            return tokenizer.decode_tokens_batch(token_batch, errors=errors)
+        except ValueError as e:
+            raise VocabularyError("failed to decode") from e
+
     def _build_vocab(self) -> Vocabulary:
         """
         Build token-to-bytes vocabulary mapping.
 
-        Creates base 256 byte tokens, adds special tokens as UTF-8 bytes,
-        and expands with merged tokens in order.
+        Adds base 256 byte tokens, special tokens as UTF-8 bytes, then merged
+        tokens in merge order so child tokens exist before their parent.
         """
         # mapping for base 256 tokens
         vocab = {btok: bytes([btok]) for btok in range(256)}
         # mapping for special tokens: encode as UTF-8 bytes
         for seq, tok in self.special_toks.items():
             vocab[tok] = seq.encode("utf-8")
-        # mapping for new merged tokens
-        for (tok0, tok1), mtok in self.merges.items():
+        # mapping for new merged tokens — must be built in merge order so that
+        # child tokens (tok0, tok1) are always present before their parent (mtok).
+        for (tok0, tok1), mtok in sorted(self.merges.items(), key=lambda x: x[1]):
             vocab[mtok] = vocab[tok0] + vocab[tok1]
 
         log.debug(f"built vocabulary with {len(vocab)} tokens")
         return vocab
 
     def _save_model(self, file_prefix: str, reg_pat: str = "") -> None:
-        """Save merge mappings and special tokens to .model file."""
+        """Persist merge mappings and special tokens to a .model file."""
 
         model_path = Path(file_prefix).with_suffix(MODEL_SUFFIX)
         # create directory if does not exist
@@ -251,7 +312,7 @@ class Tokenizer(ABC):
                 f.write(f"{pair[0]} {pair[1]} {mtok}\n")
 
     def _save_vocab(self, file_prefix: str) -> None:
-        """Save human readable token representations to .vocab file."""
+        """Persist human-readable token representations to a .vocab file."""
         vocab_path = Path(file_prefix).with_suffix(VOCAB_SUFFIX)
         vocab_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -265,7 +326,7 @@ class Tokenizer(ABC):
                 f.write(f"ST [{tok}] {seq}\n")
             # save base tokens + merge toke pairs -> token ids
             for tok, b in self.vocab.items():
-                subword = render_bytes(b)
+                subword = _render_bytes(b)
                 # token arises from merging: show derivation from child tokens
                 if tok in inverted_merges:
                     # extract child tokens and convert to bytes
@@ -277,69 +338,67 @@ class Tokenizer(ABC):
                     # raw bytes -> utf-8 while handling utf fragments and
                     # escaping control characters
                     subword0, subword1 = (
-                        render_bytes(raw_subword0),
-                        render_bytes(raw_subword1),
+                        _render_bytes(raw_subword0),
+                        _render_bytes(raw_subword1),
                     )
                     f.write(f"[{tok}] [{subword0}][{subword1}] -> {subword}\n")
                 else:
                     # one of base 256 tokens: no merging
                     f.write(f"[{tok}] {subword}\n")
 
-    @deprecated(
-        "Reference implementation for documentation only. Use `_apply_fast_bpe_chunk` for production."
-    )
-    def _apply_slow_bpe_chunk(self, tokens: list[Token]) -> list[Token]:
+    def set_special_tokens(self, special_toks: dict[str, Token]) -> None:
         """
-        Apply BPE merges to a token sequence.
+        Replace the full set of special tokens with user-assigned IDs.
 
-        :param tokens: List of tokens (initially bytes 0-255).
-        :returns: Compressed token sequence after applying learned merges.
-        """
-        # loop text compression using BPE algorithm.
-        while len(tokens) >= 2:
-            # get all unique bigram pairs.
-            # we dont need to count frequencies to find min token.
-            # see: https://github.com/karpathy/minbpe/issues/87#issuecomment-2273349030
-            bigrams = set(zip(tokens, tokens[1:]))
-            # retrieve the byte pair with the lowest merge index.
-            # because higher index tokens might depend on lower index merged tokens.
-            # use dict.get() to avoid double lookup (membership check + retrieval).
-            pair: TokenPair = min(
-                bigrams,
-                key=lambda bp: self.merges.get(bp, float("inf")),
-            )
-            # no pair to merge.
-            if pair not in self.merges:
-                break
-            # merge target pair.
-            tokens = slow_bpe_merge(tokens, pair, self.merges[pair])
+        Replaces any previously registered special tokens. Must be called
+        after training. To extend existing tokens pass the merged dict:
+        ``tok.set_special_tokens({**tok.special_toks, "<|new|>": 300})``.
 
-        return tokens
-
-    def _apply_fast_bpe_chunk(self, tokens: list[Token]) -> list[Token]:
-        """
-        Apply BPE merges using fast Rust implementation.
-
-        :param tokens: List of tokens (initially bytes 0-255).
-        :returns: Compressed token sequence after applying learned merges.
+        :param special_toks: Dictionary mapping token strings to integer IDs.
+        :raises TrainingError: If called before training.
+        :raises SpecialTokenError: If any two entries share the same ID.
+        :raises VocabularyError: If any ID collides with the BPE vocabulary.
         """
         if not self.merges:
-            return tokens
+            raise TrainingError(
+                f"{self.__class__.__name__} must be trained before setting special tokens"
+            )
 
-        # Build or retrieve cached encoder.
-        if self._encoder is None:
-            # Build merge history from dict.
-            # Note: self.merges dict preserves insertion order (Python 3.7+),
-            # but we sort by token ID to handle cases where order may not be
-            # preserved (e.g., loading from files, manual construction).
-            # Token IDs are sequential (256, 257, ...) representing merge order.
-            # This sorting is O(M log M) but only happens once (cached).
-            merge_history = sorted(self.merges.items(), key=lambda x: x[1])
+        # IDs must be unique within the incoming dict.
+        ids = list(special_toks.values())
+        if len(ids) != len(set(ids)):
+            duplicates = {
+                seq for seq, tok in special_toks.items() if ids.count(tok) > 1
+            }
+            raise SpecialTokenError("duplicate token ids", found_tokens=duplicates)
 
-            # Create Rust encoder.
-            from bytetok.bpe import RustBPEEncoder
+        # IDs must not collide with the BPE vocab (base 256 + merges).
+        bpe_vocab_size = 256 + len(self.merges)
+        for _, tok in special_toks.items():
+            if tok < bpe_vocab_size:
+                raise VocabularyError(
+                    "special token id overlaps with vocabulary", invalid_tok=tok
+                )
 
-            self._encoder = RustBPEEncoder(merge_history)
+        self.special_toks = dict(special_toks)
+        self.vocab = self._build_vocab()
+        # Invalidate so the next encode/decode call rebuilds with new special tokens.
+        self._tokenizer = None
 
-        # Apply all merges using O(N log N) algorithm.
-        return self._encoder.encode(tokens)
+    def _get_merge_history(self) -> list[tuple[tuple[int, int], int]]:
+        """Return merge history sorted by merge token id (child pairs before parents)."""
+        return sorted(self.merges.items(), key=lambda x: x[1])
+
+    def _get_rust_tokenizer(self, pattern: str | None = None) -> "RustBPETokenizer":
+        """Build or return the cached Rust tokenizer for encode/decode."""
+        if self._tokenizer is None:
+            from bytetok.bpe import RustBPETokenizer
+
+            # fallback chain: use provided pattern, then self.pat, then r".+" (match entire input as one chunk)
+            effective_pattern = pattern if pattern is not None else (self.pat or r".+")
+            self._tokenizer = RustBPETokenizer(
+                self._get_merge_history(),
+                effective_pattern,
+                self.special_toks,
+            )
+        return self._tokenizer

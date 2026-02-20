@@ -1,14 +1,14 @@
 """Basic byte-level tokenizer implementation."""
 
 from typing import override, TYPE_CHECKING
-from bytetok.bpe import RustBPETrainer
 from .base import Tokenizer
 from .._decorators import measure_time
 import logging
 
-from ..errors import TrainingError, VocabularyError
+from ..errors import VocabularyError, TrainingError
 
-from .._bpe import Encoding, Token
+from ..types import Token
+from .._trainer import _train_bpe
 
 # need only classname for type annotation
 if TYPE_CHECKING:
@@ -18,13 +18,12 @@ log = logging.getLogger(__name__)
 
 
 class BasicTokenizer(Tokenizer):
-    """
-    Tokenizer that operates directly on byte sequences without regex splitting
-    """
+    """Tokenizer that operates directly on byte sequences without regex splitting."""
 
     TOKENIZER_TYPE = "basic"
 
     def __init__(self) -> None:
+        """Initialize a basic byte-level tokenizer."""
         super().__init__()
 
     @override
@@ -32,7 +31,16 @@ class BasicTokenizer(Tokenizer):
     def train(
         self, text: str | list[str], vocab_size: int, verbose: bool = False
     ) -> None:
-        """Train tokenizer by learning byte pair merges from the input sequence."""
+        """
+        Train on raw text using byte-level BPE.
+
+        Concatenates list inputs, encodes as UTF-8 bytes, and learns
+        ``vocab_size - 256`` merges on top of the base byte vocabulary.
+
+        :param verbose: Log each learned merge when ``True``.
+        :raises VocabularyError: If ``vocab_size`` is less than or equal to 256.
+        :raises TrainingError: If the encoded training sequence is empty.
+        """
         if vocab_size <= 256:
             raise VocabularyError(
                 "vocab size must be greater than 256", vocab_size=vocab_size
@@ -47,61 +55,56 @@ class BasicTokenizer(Tokenizer):
         # merges beyond base byte vocabulary
         n_merges = vocab_size - 256
 
-        # train tokenizer
-        self._train_rust(tokens, n_merges, verbose)
+        result = _train_bpe(tokens, n_merges, verbose=verbose)
+
+        if result.n_merges_completed < n_merges:
+            log.warning(
+                f"no more byte pairs to merge after {result.n_merges_completed} merges "
+                f"(requested {n_merges}) stopping early"
+            )
+
+        self.merges = result.merges
+        self.vocab = result.vocab
+        self._tokenizer = None
 
     @override
     def encode(
-        self, text: str, strategy: "SpecialTokenStrategy | None" = None
+        self,
+        text: str,
+        strategy: "SpecialTokenStrategy | None" = None,
     ) -> list[Token]:
-        """Encode text into a sequence of tokens."""
-        # BasicTokenizer does not support special token strategies
+        """
+        Encode text into tokens using byte-level BPE.
+
+        The ``strategy`` argument is ignored; this tokenizer does not support
+        special token handling.
+        """
         _ = strategy
-        # encode Unicode text into bytes
-        txt_bytes = text.encode("utf-8", errors="replace")
-        # convert each byte to [0-255] token range
-        tokens = list(txt_bytes)
-        # return bpe of tokens
-        return self._apply_fast_bpe_chunk(tokens)
+        if not self.merges:
+            raise TrainingError(
+                f"{self.__class__.__name__} must be trained before encoding"
+            )
+        tokenizer = self._get_rust_tokenizer(pattern=r".+")
+        return tokenizer.encode_bytes(text)
 
     @override
-    def decode(self, tokens: list[Token]) -> str:
-        """Decode a sequence of tokens back into text."""
-        # token stream -> byte stream
-        txt_bytes = b"".join(self.vocab[tok] for tok in tokens)
-        # byte stream -> python string
-        return txt_bytes.decode("utf-8", errors="replace")
+    def encode_batch(
+        self,
+        texts: list[str],
+        strategy: "SpecialTokenStrategy | None" = None,
+    ) -> list[list[Token]]:
+        """
+        Encode multiple texts in parallel via Rust/Rayon.
 
-    def _train_rust(self, tokens: list[int], n_merges: int, verbose: bool) -> None:
-        """Train using fast Rust implementation."""
-
-        if len(tokens) == 0:
-            raise TrainingError("empty token sequence, no training performed")
-
-        trainer = RustBPETrainer(tokens, 256)
-        trainer.train(n_merges)
-
-        # get merge history
-        merge_history = trainer.get_merge_history()
-
-        # build merges dictionary and vocabulary
-        merges: Encoding = {}
-        vocab = {tok: bytes([tok]) for tok in range(256)}
-
-        for pair, tok in merge_history:
-            merges[pair] = tok
-            vocab[tok] = vocab[pair[0]] + vocab[pair[1]]
-
-            if verbose:
-                log.info(f"merge {len(merges)}/{n_merges}: {pair} -> {tok}")
-
-        if len(merge_history) < n_merges:
-            log.warning(
-                f"no more byte pairs to merge after {len(merge_history)} merges "
-                f"(requested {n_merges}). stopping early."
+        The ``strategy`` argument is ignored; this tokenizer does not support
+        special token handling.
+        """
+        _ = strategy
+        if not self.merges:
+            raise TrainingError(
+                f"{self.__class__.__name__} must be trained before encoding"
             )
-
-        self.merges = merges  # used for encoding text -> tokens
-        self.vocab = vocab  # used for decoding tokens -> text
-        # invalidate encoder cache since merges changed
-        self._encoder = None
+        if not texts:
+            return []
+        tokenizer = self._get_rust_tokenizer(pattern=r".+")
+        return tokenizer.encode_bytes_batch(texts)

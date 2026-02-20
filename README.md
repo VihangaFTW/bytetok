@@ -5,7 +5,19 @@
 ![Python versions](https://img.shields.io/pypi/pyversions/bytetok?cacheSeconds=300)
 ![License](https://img.shields.io/github/license/VihangaFTW/bytetok)
 
-ByteTok implements Byte Pair Encoding (BPE) at the byte-level with a Rust-accelerated core for training and encoding. Text is first converted to raw bytes (0-255), then iteratively merged using learned pair statistics. The training algorithm is based on [Algorithm 2](https://aclanthology.org/2023.findings-acl.38.pdf) from _"A Formal Perspective on Byte-Pair Encoding"_, achieving O(N log V) training and O(N log N) encoding versus the naive O(NV) approach.
+ByteTok implements Byte Pair Encoding (BPE) at the byte-level with a Rust-accelerated core for training and encoding. Text is first converted to raw bytes (0-255), then iteratively merged using learned pair statistics.
+
+The training algorithm is based on an optimized [BPE algorithm](https://aclanthology.org/2023.findings-acl.38.pdf) from the paper _A Formal Perspective on Byte-Pair Encoding_. The research has enabled ByteTok to achieve O(N log V) training time and O(N log N) encoding time versus the naive O(NV) approach.
+
+> Here, N denotes the length of the input text and V is the tokenizer's vocabulary size.
+
+## Features
+
+- **High-performance Rust-powered training, encoding, and decoding**: Engineered from the ground up with a parallel processing pipeline for efficient handling of large-scale NLP datasets (1GB+) with the aim of enabling rapid processing for modern LLM applications.
+- **Built-in regex patterns**: Choose from a pre-tokenization regex preset that includes GPT-2, GPT-4, GPT-4o, LLaMA 3, Qwen 2 and DeepSeek.
+- **Custom regex patterns**: Supported alongside the built-in presets.
+- **Special token strategies**: Control how special tokens are handled during encoding.
+- **Serialization**: Supports versioned `.model` / `.vocab` file formats for saving tokenizer state, as well as easy loading via a `from_pretrained()` function.
 
 ## History
 
@@ -16,33 +28,27 @@ This project started as a weekend experiment with BPE for text compression. I la
 - Encode text
 - Decode text
 
-Libraries like OpenAI's [tiktoken](https://github.com/openai/tiktoken) and Google's [sentencepiece](https://github.com/google/sentencepiece) exist and are probably better for production work. But ByteTok wasn't designed to compete with them or benchmaxx. I wanted a straightforward API that took a string and returned a list of integers; not something that forced me to read through documentation for 200 function arguments (looking at you, `sentencepiece`).
+Feel free to check out robust libraries such as OpenAI's [tiktoken](https://github.com/openai/tiktoken) and Google's [sentencepiece](https://github.com/google/sentencepiece) that are widely adopted in production environments. Tiktoken resembles ByteTok the most, but it should be noted that ByteTok provides a training pipeline which Tiktoken lacks.
 
-As my dataset requirements grew, the naive BPE implementation started struggling. So I rewrote the trainer and encoder in Rust using a much more efficient algorithm 😎.
-
-## Features
-
-- **Fast Rust-backed training and encoding** via PyO3/maturin for datasets larger than 100MB. ByteTok delivers _600x-1000x_ better performance when compared to a naive O(NV) implementation.
-- **Built-in regex patterns** from GPT-2, GPT-4, GPT-4o, LLaMA 3, Qwen 2, DeepSeek, StarCoder, Falcon, and BLOOM.
-- **Custom patterns** supported alongside the built-in presets.
-- **Special token strategies** for controlling how special tokens are handled during encoding.
-- **Serialization** with versioned `.model` / `.vocab` file format and `from_pretrained()` loader.
+In contrast, ByteTok was developed with a different focus. It prioritizes simplicity and usability by offering a clear API that efficiently maps strings to lists of token IDs. All this without burdening users with overly complex configuration or excessive parameters.
 
 ## Benchmarks
 
-Benchmarks were run on Linux x86_64 with an Intel Core i7-12700H (20 cores @ 4.70 GHz) and 32GB DDR5 RAM.
+These benchmarks were conducted on a Linux x86_64 system equipped with an Intel Core i7-12700H processor (20 cores @ 4.70 GHz) and 32GB DDR5 RAM. Encoding and decoding throughput represent the speed of `encode_batch()` and `decode_batch()` operations, respectively.
 
-| Dataset                                                                                     | Corpus Size            | Vocab Size | Training Time      | Encoding Throughput           | Decoding Throughput | Compression Ratio | Size Reduction |
-| ------------------------------------------------------------------------------------------- | ---------------------- | ---------- | ------------------ | ----------------------------- | ------------------- | ----------------- | -------------- |
-| [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci-Fi-Books-gutenberg) | 88.85 MB (93M chars)   | 25,000     | 198s (~3.3 mins)   | 2.99M chars/sec (2.85 MB/sec) | 19.2M tokens/sec    | 1.43x             | 30.3%          |
-| [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci-Fi-Books-gutenberg) | 216.96 MB (227M chars) | 10,000     | 523s (~8.7 mins)   | 2.86M chars/sec (2.73 MB/sec) | 17.1M tokens/sec    | 1.60x             | 37.7%          |
-| [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci-Fi-Books-gutenberg) | 216.96 MB (227M chars) | 25,000     | 579s (~9.65 mins)  | 2.85M chars/sec (2.72 MB/sec) | 17.0M tokens/sec    | 1.68x             | 40.6%          |
-| [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci-Fi-Books-gutenberg) | 216.96 MB (227M chars) | 50,000     | 640s (~10.7 mins)  | 2.76M chars/sec (2.63 MB/sec) | 16.4M tokens/sec    | 1.75x             | 42.7%          |
-| [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci-Fi-Books-gutenberg) | 326.96 MB (343M chars) | 50,000     | 1048s (~17.5 mins) | 2.82M chars/sec (2.69 MB/sec) | 7.02M tokens/sec    | 1.44x             | 30.7%          |
+Dataset: [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci-Fi-Books-gutenberg)
+
+| Corpus Size | Vocab Size | Training Time | Encoding Throughput | Decoding Throughput | Compression Ratio | Size Reduction |
+| ----------- | ---------- | ------------- | ------------------- | ------------------- | ----------------- | -------------- |
+| 132.36 MB   | 10,000     | 4.58 mins     | 16.12 MB/sec        | 82.4M tokens/sec    | 1.38x             | 27.5%          |
+| 216.96 MB   | 10,000     | 8.75 mins     | 13.82 MB/sec        | 81.4M tokens/sec    | 1.60x             | 37.7%          |
+| 216.96 MB   | 25,000     | 9.74 mins     | 14.55 MB/sec        | 70.2M tokens/sec    | 1.68x             | 40.6%          |
+| 216.96 MB   | 50,000     | 10.67 mins    | 14.99 MB/sec        | 77.0M tokens/sec    | 1.75x             | 42.7%          |
+| 326.96 MB   | 50,000     | 16.19 mins    | 14.61 MB/sec        | 79.3M tokens/sec    | 1.44x             | 30.7%          |
 
 ## Requirements
 
-- Python >= 3.13
+- Python >= 3.12
 
 ## Installation
 
@@ -58,48 +64,112 @@ uv add bytetok
 
 ### Building from Source
 
-If you want to develop or build from source, you'll need a Rust toolchain ([rustup](https://rustup.rs/)):
+If you want to develop or build from source, you will need the Rust toolchain [rustup](https://rustup.rs/).
 
 ```bash
 # clone the repository
-git clone https://github.com/vihanga-malaviarachchi/bytetok.git
-cd bytetok
+git clone https://github.com/VihangaFTW/bytetok.git
 
 # install with uv
 uv sync
 
 # or build with maturin
-pip install maturin
-maturin develop
+uv sync --group dev
+uv run maturin develop --release
 ```
 
 ## Quick Start
 
+Here you will find the primary workflows for using ByteTok tokenizers. For detailed API usage and additional features, see the [full documentation in the Wiki](https://github.com/VihangaFTW/bytetok/wiki/ByteTok-Documentation).
+
+### Basics
+
+The API has been designed with simplicity in mind:
+
 ```python
-import bytetok
+import bytetok as btok
 
-# create a tokenizer with a built-in pattern (default: gpt4o)
-tokenizer = bytetok.get_tokenizer("gpt4o")
 
-# train on text
+# Create a tokenizer with a built-in pattern (default: gpt4o).
+tokenizer = btok.get_tokenizer("gpt4o")
+
+# Train on text.
 tokenizer.train("your training corpus here...", vocab_size=1000)
 
-# encode and decode
+# Encode and decode.
 tokens = tokenizer.encode("Hello, world!")
 text = tokenizer.decode(tokens)
 assert text == "Hello, world!"
 
-# save and reload
+# Save and reload.
 tokenizer.save("my_tokenizer")
-reloaded = bytetok.from_pretrained("my_tokenizer.model")
+reloaded = btok.from_pretrained("my_tokenizer.model")
 ```
 
-## Documentation
+Custom regex patterns can be used for pre-tokenization:
 
-Complete API documentation is available in the [project wiki](https://github.com/VihangaFTW/bytetok/wiki/ByteTok-Documentation).
+```python
+import bytetok as btok
 
 
-## Acknowlegment
+# Create a tokenizer with a custom pattern
+# For example, split on whitespace and punctuation.
+tokenizer = btok.get_tokenizer(custom_pattern = r"\w+|[^\w\s]")
+
+```
+
+For best results, it is recommended to choose from the built-in presets, which have been extensively validated.
+
+### Parallel Encoding
+
+ByteTok supports parallel encoding and decoding for faster processing of large batches of text.
+
+Use `encode_batch` to perform parallel encoding to efficiently handle large collections of texts. You can then decode the resulting list of token sequences in parallel using `decode_batch`:
+
+```python
+import bytetok as btok
+
+
+tokenizer = btok.get_tokenizer("gpt4o")
+tokenizer.train("your training corpus here...", vocab_size=1000)
+
+# Encode a batch of texts in parallel.
+texts = ["First document...", "Second document...", "Third document..."]
+encoded = tokenizer.encode_batch(texts)
+
+# Decode the batch in parallel.
+decoded = tokenizer.decode_batch(encoded, errors="replace")
+assert decoded[0] == "First document..."
+```
+
+### Special Tokens
+
+Register special tokens after training, then encode with a strategy to control how they are handled:
+
+```python
+import bytetok as btok
+
+
+tokenizer = btok.get_tokenizer("gpt4o")
+tokenizer.train("your training corpus here...", vocab_size=1000)
+
+# Set special tokens (IDs must be >= vocab size).
+tokenizer.set_special_tokens({"<|endoftext|>": 15005, "<|pad|>": 13005})
+
+# Encode with strategy: "all" allows special tokens in text; "none" ignores them.
+strategy = btok.get_strategy("all")
+tokens = tokenizer.encode("Hello<|endoftext|>world", strategy=strategy)
+
+# Batch encoding with special tokens.
+encoded = tokenizer.encode_batch(
+    ["Doc one.", "Doc two<|pad|>padding", "Doc three."],
+    strategy=strategy,
+)
+```
+
+ByteTok automatically checks for conflicts when special tokens would replace existing tokens in the vocabulary or if there are duplicates.
+
+## Acknowledgment
 
 ByteTok is inspired by Andrej Kaparthy's [minbpe](https://github.com/karpathy/minbpe). A walkthrough of _minbpe_ repository is documented on his Youtube channel [here](https://youtu.be/zduSFxRajkE).
 

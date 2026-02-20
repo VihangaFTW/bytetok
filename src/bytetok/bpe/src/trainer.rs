@@ -1,6 +1,6 @@
 //! Core BPE training algorithm (Algorithm 2).
 //!
-//! Optimized implementation from "Byte Pair Encoding is Suboptimal for Language Model Pretraining"
+//! Optimized implementation from "A Formal Perspective on Byte-Pair Encoding"
 //! https://aclanthology.org/2023.findings-acl.38.pdf
 //!
 //! Time complexity: O(N log V) vs O(NV) for naive implementation.
@@ -11,13 +11,7 @@ use std::{
     ops::ControlFlow,
 };
 
-use crate::types::{TextIdx, Token, TokenFreq};
-
-/// A pair of adjacent tokens in the training sequence.
-///
-/// Used as a key for tracking pair frequencies and positions during training.
-#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone)]
-struct TokenPair(Token, Token);
+use crate::types::{TextIdx, Token, TokenFreq, TokenPair};
 
 /// Node in doubly-linked list representing a token in the training sequence.
 ///
@@ -78,7 +72,7 @@ impl Ord for HeapItem {
 /// - The `Vec` provides stable indices for nodes
 /// - Deletions are O(1) by setting entries to `None`
 /// - Traversal is done via index-based left/right links inside `Node`
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct BPETrainer {
     /// Storage arena for nodes.
     ///
@@ -225,10 +219,14 @@ impl BPETrainer {
         true
     }
 
-    /// Train BPE with M merges.
+    /// Trains the BPE model by performing the specified number of merges.
+    ///
+    /// Repeatedly calls `merge_step` up to `num_merges` times. Stops early
+    /// if no more pairs can be merged.
     ///
     /// # Arguments
-    /// * `num_merges` - Number of merge operations to perform.
+    ///
+    /// * `num_merges` - Maximum number of merge operations to perform.
     pub(crate) fn train(&mut self, num_merges: usize) {
         for _i in 0..num_merges {
             if !self.merge_step() {
@@ -246,7 +244,7 @@ impl BPETrainer {
     /// # Returns
     ///
     /// A vector containing the current token sequence after all merges performed so far.
-    pub(crate) fn get_encodings(&self) -> Vec<Token> {
+    pub(crate) fn encodings(&self) -> Vec<Token> {
         let mut result = Vec::new();
 
         let mut current = self.head_idx;
@@ -268,9 +266,9 @@ impl BPETrainer {
     /// # Returns
     ///
     /// A vector of tuples `((left_token, right_token), merged_token)` in the order
-    /// they were performed. This history is used by the encoder to apply merges in
+    /// they were performed. This history is used by the converter to apply merges in
     /// the correct order.
-    pub(crate) fn get_merge_history(&self) -> Vec<((Token, Token), Token)> {
+    pub(crate) fn merge_history(&self) -> Vec<((Token, Token), Token)> {
         self.merge_history.clone()
     }
 
@@ -534,7 +532,7 @@ impl BPETrainer {
     /// Outputs the current token sequence and the top 5 most frequent pairs.
     pub(crate) fn print_state(&self) {
         print!("Tokens: ");
-        for token in self.get_encodings() {
+        for token in self.encodings() {
             print!("{} ", token);
         }
         println!();
@@ -557,7 +555,7 @@ mod tests {
         let tokens = [0, 1, 0, 0, 1, 1, 0, 0];
         let mut trainer = BPETrainer::new(&tokens, 2);
         trainer.train(3);
-        let final_tokens = trainer.get_encodings();
+        let final_tokens = trainer.encodings();
         // Should have fewer tokens than we started with.
         assert!(final_tokens.len() < 8);
     }
@@ -566,14 +564,14 @@ mod tests {
     fn test_empty_sequence() {
         let tokens = [];
         let trainer = BPETrainer::new(&tokens, 0);
-        assert_eq!(trainer.get_encodings(), Vec::<usize>::new());
+        assert_eq!(trainer.encodings(), Vec::<usize>::new());
     }
 
     #[test]
     fn test_single_token() {
         let tokens = [0];
         let trainer = BPETrainer::new(&tokens, 1);
-        assert_eq!(trainer.get_encodings(), vec![0]);
+        assert_eq!(trainer.encodings(), vec![0]);
     }
 
     #[test]

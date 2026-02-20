@@ -75,3 +75,7 @@ temp/
 # training outputs
 *.model
 *.vocab
+
+# benchmark cache
+.bench_cache/
+

@@ -1,11 +1,11 @@
-//! BPE Encoder - Efficient token encoding using learned merge rules.
+//! BPE Converter - Efficient token encoding using learned merge rules.
 //!
 //! This implementation applies BPE merges to input token sequences using
 //! a priority queue approach inspired by the training algorithm from:
-//! "Byte Pair Encoding is Suboptimal for Language Model Pretraining"
+//! "A Formal Perspective on Byte-Pair Encoding"
 //! https://aclanthology.org/2023.findings-acl.38.pdf
 //!
-//! The encoder applies merges in the order they were learned during training
+//! The converter applies merges in the order they were learned during training
 //! to ensure deterministic and correct application of merge rules.
 
 use std::{
@@ -13,18 +13,10 @@ use std::{
     collections::{BinaryHeap, HashMap},
 };
 
-use crate::types::Token;
-
-/// Merge order indicates when a merge rule was learned during training.
-///
-/// Lower values represent earlier merges (e.g., 0 = first merge, 1 = second merge).
-type MergeOrder = usize;
-
-/// A pair of adjacent tokens that can potentially be merged.
-///
-/// Used as a key for looking up merge rules learned during training.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct TokenPair(Token, Token);
+use crate::{
+    error::{DecodeError, SpecialTokenError},
+    types::{ByteSeq, MergeOrder, Token, TokenPair},
+};
 
 /// Item in the priority queue for merge ordering.
 ///
@@ -36,10 +28,10 @@ struct MergeCandidate {
     ///
     /// Lower values have higher priority and will be applied first.
     merge_order: MergeOrder,
-    
+
     /// The token pair to be merged.
     pair: TokenPair,
-    
+
     /// Position in the token sequence where this pair starts.
     ///
     /// Used as a tiebreaker when multiple pairs have the same merge_order.
@@ -64,7 +56,7 @@ impl Ord for MergeCandidate {
     }
 }
 
-/// Efficient BPE encoder that applies learned merge rules to token sequences.
+/// Efficient BPE converter that applies learned merge rules to token sequences.
 ///
 /// Uses a priority queue approach to ensure merges are applied in the correct
 /// order, following the sequence they were learned during training.
@@ -77,49 +69,112 @@ impl Ord for MergeCandidate {
 /// # Example
 ///
 /// ```ignore
+/// use std::collections::HashMap;
 /// let merge_history = vec![((0, 1), 2), ((2, 0), 3)];
-/// let encoder = BPEEncoder::new(merge_history);
+/// let converter = BPEConverter::new(merge_history, &HashMap::new()).unwrap();
 /// let tokens = vec![0, 1, 0];
-/// let encoded = encoder.encode(tokens);
+/// let encoded = converter.encode(tokens);
 /// assert_eq!(encoded, vec![3]);
 /// ```
-pub(crate) struct BPEEncoder {
+pub(crate) struct BPEConverter {
     /// Maps token pairs to (merged_token, merge_order).
     ///
     /// The merge_order indicates when this merge was learned during training,
     /// with lower values representing earlier merges.
     merges: HashMap<TokenPair, (Token, MergeOrder)>,
+
+    /// Maps token IDs to their byte sequences.
+    ///
+    /// - vocab[0..256]: Base vocabulary (single bytes)
+    /// - vocab[256..]: Merged tokens (concatenated byte sequences)
+    vocab: Vec<ByteSeq>,
+    /// Maps special token IDs to their corresponding byte sequences.
+    ///
+    /// Used during decoding to reconstruct the original byte representation of special tokens.
+    inverted_special_tokens: HashMap<Token, ByteSeq>,
 }
 
-impl BPEEncoder {
-    /// Creates a new BPE encoder from merge history.
+impl BPEConverter {
+    /// Creates a new BPE converter from merge history.
     ///
     /// # Arguments
     ///
     /// * `merge_history` - Iterator of merge rules as `((left_token, right_token), merged_token)`.
     ///   The order of iteration determines merge priority (earlier = higher priority).
+    /// * `special_tokens` - Mapping of special token strings to their token IDs.
+    ///   Token IDs must not overlap with any existing vocabulary IDs.
     ///
     /// # Important
     ///
     /// The ordering in `merge_history` is the source of truth for the encoding algorithm.
     /// Verify the integrity of this ordering before calling `encode()`; incorrect ordering
-    /// will produce incorrect encodings.
+    /// will produce incorrect encodings AND degrade performance.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SpecialTokenError::IllegalToken` if a special token ID collides
+    /// with a base vocabulary or merged token ID.
     ///
     /// # Example
     ///
     /// ```ignore
+    /// use std::collections::HashMap;
     /// let merge_history = vec![
     ///     ((0, 1), 256),  // First merge: pair (0,1) -> token 256
     ///     ((256, 0), 257), // Second merge: pair (256,0) -> token 257
     /// ];
-    /// let encoder = BPEEncoder::new(merge_history);
+    /// let converter = BPEConverter::new(merge_history, &HashMap::new()).unwrap();
     /// ```
-    pub(crate) fn new(merge_history: impl IntoIterator<Item = ((Token, Token), Token)>) -> Self {
+    pub(crate) fn new(
+        merge_history: impl IntoIterator<Item = ((Token, Token), Token)>,
+        special_tokens: &HashMap<String, Token>,
+    ) -> Result<Self, SpecialTokenError> {
         let mut merges = HashMap::new();
+        let mut vocab: Vec<ByteSeq> = Vec::new();
+
+        // initialize base vocabulary (0-255 → single bytes).
+        for i in 0..256 {
+            vocab.push(vec![i as u8])
+        }
+
         for (merge_order, (pair, tok)) in merge_history.into_iter().enumerate() {
             merges.insert(TokenPair(pair.0, pair.1), (tok, merge_order));
+
+            // build vocabulary entry for merged token by concatenating constituent byte sequences
+            // ensure vector can be safely indexed at position tok without panicking; O(1) time
+            // ensure merge history is in order; otherwise O(N) time
+            while vocab.len() <= tok {
+                vocab.push(Vec::new());
+            }
+            // we cant reuse the vector pushed above due to borrow checker
+            // not allowing simultaneous mutable and immutable borrow of vocab
+            // solution is to use a temporary vector to accumulate byte sequence
+            let mut merged_bytes = Vec::new();
+            if let Some(left_bytes) = vocab.get(pair.0) {
+                merged_bytes.extend_from_slice(left_bytes);
+            }
+            if let Some(right_bytes) = vocab.get(pair.1) {
+                merged_bytes.extend_from_slice(right_bytes);
+            }
+            vocab[tok] = merged_bytes;
         }
-        Self { merges }
+
+        // track inverted mapping for decoding
+        let mut inverted_special_tokens: HashMap<Token, ByteSeq> = HashMap::new();
+
+        for (s, tok) in special_tokens.iter() {
+            // ensure no special token overwrites an existing token
+            if *tok < vocab.len() {
+                return Err(SpecialTokenError::IllegalToken(*tok));
+            }
+            inverted_special_tokens.insert(*tok, s.as_bytes().to_vec());
+        }
+
+        Ok(Self {
+            merges,
+            vocab,
+            inverted_special_tokens,
+        })
     }
 
     /// Encodes a token sequence by applying learned BPE merge rules.
@@ -143,8 +198,9 @@ impl BPEEncoder {
     /// # Example
     ///
     /// ```ignore
-    /// let encoder = BPEEncoder::new(vec![((0, 1), 2)]);
-    /// let encoded = encoder.encode(vec![0, 1, 0, 1]);
+    /// use std::collections::HashMap;
+    /// let converter = BPEConverter::new(vec![((0, 1), 2)], &HashMap::new()).unwrap();
+    /// let encoded = converter.encode(vec![0, 1, 0, 1]);
     /// assert_eq!(encoded, vec![2, 2]);
     /// ```
     pub(crate) fn encode(&self, tokens: Vec<Token>) -> Vec<Token> {
@@ -206,9 +262,7 @@ impl BPEEncoder {
             self.track_new_merge_candidate(&mut heap, &results, pos, merge_tok, false);
         }
 
-        // build final output list: filter None values
-        let encoding: Vec<Token> = results.into_iter().flatten().collect();
-        encoding
+        results.into_iter().flatten().collect()
     }
     /// Adds new merge candidates to the priority queue after a successful merge.
     ///
@@ -304,27 +358,57 @@ impl BPEEncoder {
         }
     }
 
-    /// Checks if a token pair can be merged according to learned rules.
+    /// Returns a reference to the vocabulary.
+    ///
+    /// # Returns
+    ///
+    /// Reference to the vocabulary mapping token IDs to byte sequences.
+    pub(crate) fn vocab(&self) -> &[ByteSeq] {
+        &self.vocab
+    }
+
+    /// Decodes a token sequence back into bytes.
+    ///
+    /// Looks up each token ID in the vocabulary (or the special token map)
+    /// and concatenates the corresponding byte sequences.
     ///
     /// # Arguments
     ///
-    /// * `left` - The left token in the pair.
-    /// * `right` - The right token in the pair.
+    /// * `tokens` - Sequence of token IDs to decode.
     ///
     /// # Returns
     ///
-    /// `true` if a merge rule exists for this pair, `false` otherwise.
-    pub(crate) fn can_merge(&self, left: Token, right: Token) -> bool {
-        self.merges.contains_key(&TokenPair(left, right))
-    }
+    /// `Ok(ByteSeq)` containing the concatenated byte representation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DecodeError::UnknownToken` if any token ID is not found in
+    /// the vocabulary or the special token map.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use std::collections::HashMap;
+    /// let converter = BPEConverter::new(vec![((97, 98), 256)], &HashMap::new()).unwrap();
+    /// let bytes = converter.decode(&[256, 99]).unwrap();
+    /// assert_eq!(bytes, vec![97, 98, 99]); // "abc"
+    /// ```
+    pub(crate) fn decode(&self, tokens: &[Token]) -> Result<ByteSeq, DecodeError> {
+        let mut result = Vec::new();
+        for &token in tokens {
+            if let Some(bytes) = self.vocab.get(token) {
+                result.extend_from_slice(bytes);
+                continue;
+            }
 
-    /// Returns the total number of merge rules in this encoder.
-    ///
-    /// # Returns
-    ///
-    /// The number of learned merge rules available for encoding.
-    pub(crate) fn num_merges(&self) -> usize {
-        self.merges.len()
+            if let Some(bytes) = self.inverted_special_tokens.get(&token) {
+                result.extend_from_slice(bytes);
+                continue;
+            }
+
+            return Err(DecodeError::UnknownToken(token));
+        }
+        Ok(result)
     }
 }
 
@@ -332,15 +416,20 @@ impl BPEEncoder {
 mod tests {
     use super::*;
 
+    fn empty_special() -> HashMap<String, Token> {
+        HashMap::new()
+    }
+
     #[test]
     fn test_basic_encoding() {
         let history = vec![((0, 1), 2), ((2, 0), 3)];
 
-        let encoder = BPEEncoder::new(history);
+        let converter =
+            BPEConverter::new(history, &empty_special()).expect("converter init failed");
 
         // Basic two-step merge.
         let tokens = vec![0, 1, 0];
-        let encoded = encoder.encode(tokens);
+        let encoded = converter.encode(tokens);
 
         assert_eq!(encoded, vec![3]);
     }
@@ -348,10 +437,10 @@ mod tests {
     #[test]
     fn test_single_token_no_change() {
         let history = vec![((0, 1), 2)];
-        let encoder = BPEEncoder::new(history);
+        let converter = BPEConverter::new(history, &empty_special()).expect("converter init failed");
 
         let tokens = vec![7];
-        let encoded = encoder.encode(tokens);
+        let encoded = converter.encode(tokens);
 
         assert_eq!(encoded, vec![7]);
     }
@@ -359,10 +448,10 @@ mod tests {
     #[test]
     fn test_no_merge_rules_apply() {
         let history = vec![((5, 6), 7)];
-        let encoder = BPEEncoder::new(history);
+        let converter = BPEConverter::new(history, &empty_special()).expect("converter init failed");
 
         let tokens = vec![0, 1, 2, 3];
-        let encoded = encoder.encode(tokens);
+        let encoded = converter.encode(tokens);
 
         assert_eq!(encoded, vec![0, 1, 2, 3]);
     }
@@ -370,10 +459,10 @@ mod tests {
     #[test]
     fn test_merge_skips_consumed_right() {
         let history = vec![((0, 1), 2), ((2, 0), 3)];
-        let encoder = BPEEncoder::new(history);
+        let converter = BPEConverter::new(history, &empty_special()).expect("converter init failed");
 
         let tokens = vec![0, 1, 0, 9];
-        let encoded = encoder.encode(tokens);
+        let encoded = converter.encode(tokens);
 
         assert_eq!(encoded, vec![3, 9]);
     }
@@ -381,10 +470,10 @@ mod tests {
     #[test]
     fn test_merge_skips_consumed_left() {
         let history = vec![((0, 1), 4), ((2, 3), 5), ((4, 5), 6)];
-        let encoder = BPEEncoder::new(history);
+        let converter = BPEConverter::new(history, &empty_special()).expect("converter init failed");
 
         let tokens = vec![0, 1, 2, 3];
-        let encoded = encoder.encode(tokens);
+        let encoded = converter.encode(tokens);
 
         assert_eq!(encoded, vec![6]);
     }
@@ -392,10 +481,10 @@ mod tests {
     #[test]
     fn test_tie_break_by_position() {
         let history = vec![((0, 1), 2), ((2, 1), 3)];
-        let encoder = BPEEncoder::new(history);
+        let converter = BPEConverter::new(history, &empty_special()).expect("converter init failed");
 
         let tokens = vec![0, 1, 1];
-        let encoded = encoder.encode(tokens);
+        let encoded = converter.encode(tokens);
 
         assert_eq!(encoded, vec![3]);
     }
@@ -403,11 +492,99 @@ mod tests {
     #[test]
     fn test_multiple_disjoint_merges() {
         let history = vec![((0, 0), 2), ((1, 1), 3)];
-        let encoder = BPEEncoder::new(history);
+        let converter = BPEConverter::new(history, &empty_special()).expect("converter init failed");
 
         let tokens = vec![0, 0, 1, 1];
-        let encoded = encoder.encode(tokens);
+        let encoded = converter.encode(tokens);
 
         assert_eq!(encoded, vec![2, 3]);
+    }
+
+    #[test]
+    fn test_decode_base_tokens() {
+        let history = vec![];
+        let converter = BPEConverter::new(history, &empty_special()).expect("converter init failed");
+
+        // Decode "abc" (UTF-8 bytes: [97, 98, 99]).
+        let decoded = converter.decode(&[97, 98, 99]).expect("decoding failed");
+        assert_eq!(decoded, vec![97, 98, 99]);
+    }
+
+    #[test]
+    fn test_decode_merged_tokens() {
+        let history = vec![((97, 98), 256)];
+        let converter = BPEConverter::new(history, &empty_special()).expect("converter init failed");
+
+        // Token 256 should decode to [97, 98].
+        let decoded = converter.decode(&[256, 99]).expect("decoding failed");
+        assert_eq!(decoded, vec![97, 98, 99]);
+    }
+
+    #[test]
+    fn test_decode_nested_merges() {
+        let history = vec![((97, 98), 256), ((256, 99), 257)];
+        let converter = BPEConverter::new(history, &empty_special()).expect("converter init failed");
+
+        // Token 257 should decode to [97, 98, 99].
+        let decoded = converter.decode(&[257]).expect("decoding failed");
+        assert_eq!(decoded, vec![97, 98, 99]);
+    }
+
+    #[test]
+    fn test_decode_invalid_token() {
+        let history = vec![((97, 98), 256)];
+        let converter = BPEConverter::new(history, &empty_special()).expect("converter init failed");
+
+        // Token 999 doesn't exist - should return an error.
+        let result = converter.decode(&[97, 999]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decode_special_token() {
+        let special =
+            HashMap::from([("<|eot|>".to_string(), 1000 as Token)]);
+        let converter =
+            BPEConverter::new(vec![], &special).expect("converter init failed");
+        let decoded = converter.decode(&[1000]).expect("decoding failed");
+        assert_eq!(decoded, b"<|eot|>".to_vec());
+    }
+
+    #[test]
+    fn test_decode_special_token_mixed_with_vocab() {
+        let history = vec![((97, 98), 256)];
+        let special =
+            HashMap::from([("<|eot|>".to_string(), 1000 as Token)]);
+        let converter =
+            BPEConverter::new(history, &special).expect("converter init failed");
+        let decoded = converter.decode(&[256, 1000, 99]).expect("decoding failed");
+        assert_eq!(decoded, b"ab<|eot|>c".to_vec());
+    }
+
+    #[test]
+    fn test_special_token_overlaps_base_vocab() {
+        let special = HashMap::from([("<|bad|>".to_string(), 255 as Token)]);
+        let result = BPEConverter::new(vec![], &special);
+        assert!(matches!(result, Err(SpecialTokenError::IllegalToken(255))));
+    }
+
+    #[test]
+    fn test_special_token_overlaps_merged_vocab() {
+        let history = vec![((97, 98), 256)];
+        let special = HashMap::from([("<|bad|>".to_string(), 256 as Token)]);
+        let result = BPEConverter::new(history, &special);
+        assert!(matches!(result, Err(SpecialTokenError::IllegalToken(256))));
+    }
+
+    #[test]
+    fn test_vocab_size() {
+        let history = vec![((97, 98), 256), ((256, 99), 257)];
+        let converter = BPEConverter::new(history, &empty_special()).expect("converter init failed");
+
+        // Should have at least 258 entries (0-255 base + 256, 257).
+        assert!(converter.vocab().len() >= 258);
+        assert_eq!(converter.vocab()[97], vec![97]);
+        assert_eq!(converter.vocab()[256], vec![97, 98]);
+        assert_eq!(converter.vocab()[257], vec![97, 98, 99]);
     }
 }
