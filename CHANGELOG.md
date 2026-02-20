@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated README quick start section with examples on parallel encoding and special token workflows.
 - Improved encoding and decoding performance across single-text, batch, and special-token workloads.
 
-![Benchmark comparison](assets/v0-2-0_bench.png)
+![Benchmark comparison](assets/v020_bench.png)
 
 ### Removed
 
