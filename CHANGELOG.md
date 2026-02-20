@@ -5,21 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- Ports Python-side text preprocessing in the training algorithm to Rust for faster training times.
+
 ## [0.2.0] - 2026-02-20
 
 ### Added
 
-- Parallel processing pipeline for encode and decode
+- Parallel encode/decode processing pipeline.
+- Support for user-defined special token IDs, with validation for duplicates and overwrites.
+
+## Fixed
+
+- `save()` now throws a `TrainingError` when attempting to save an untrained tokenizer, preventing silent writes of empty files.
 
 ### Changed
 
-- Ported majority of encode and decode logic to Rust
-- Simplified Python API architecture
-- Improved encoding and decoding performance across single-text, batch, and special-token workloads (~5–6× faster than v0.1.2 on batch encode/decode)
-- Special tokens now accept user-defined IDs, with error handling for duplicates and overwrites
+- Ported majority of Python encode and decode logic to Rust.
+- Streamlined Python `Tokenizer` internals to eliminate redundant code following migration of hot path logic to Rust.
+- Added internal helper methods in `Tokenizer` ABC for wiring Rust logic to Python API.
+- Moved `decode_batch()` to `Tokenizer` ABC.
+- Added `encode_batch()` method in `Tokenizer` subclasses.
+- Bumped package version from `v0.1.2` to `v.0.2.0`.
 - Updated tokenizer version from `0.1.0` to `0.2.0` for consistency with the package version.
+- Updated README quick start section with examples on parallel encoding and special token workflows.
+- Improved encoding and decoding performance across single-text, batch, and special-token workloads.
 
 ![Benchmark comparison](assets/v0-2-0_bench.png)
+
+### Removed
+
+- Regex patterns for StarCoder, BLOOM, and Falcon were removed from the preset as remaining patterns cover most use cases.
+- The `_bpe.py` module and its `slow_bpe_merge()` and `slow_bpe_merge_with_freq_update()` functions have been removed.
 
 ## [0.1.2] - 2026-02-07
 

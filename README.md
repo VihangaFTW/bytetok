@@ -34,9 +34,9 @@ In contrast, ByteTok was developed with a different focus. It prioritizes simpli
 
 ## Benchmarks
 
-Benchmarks were run on Linux x86_64 with an Intel Core i7-12700H (20 cores @ 4.70 GHz) and 32GB DDR5 RAM.
+These benchmarks were conducted on a Linux x86_64 system equipped with an Intel Core i7-12700H processor (20 cores @ 4.70 GHz) and 32GB DDR5 RAM. Encoding and decoding throughput represent the speed of `encode_batch()` and `decode_batch()` operations, respectively.
 
-Dataset: [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci-Fi-Books-gutenberg).
+Dataset: [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci-Fi-Books-gutenberg)
 
 | Corpus Size | Vocab Size | Training Time | Encoding Throughput | Decoding Throughput | Compression Ratio | Size Reduction |
 | ----------- | ---------- | ------------- | ------------------- | ------------------- | ----------------- | -------------- |
@@ -64,12 +64,11 @@ uv add bytetok
 
 ### Building from Source
 
-If you want to develop or build from source, you'll need a Rust toolchain ([rustup](https://rustup.rs/)):
+If you want to develop or build from source, you will need the Rust toolchain [rustup](https://rustup.rs/).
 
 ```bash
 # clone the repository
 git clone https://github.com/VihangaFTW/bytetok.git
-cd bytetok
 
 # install with uv
 uv sync
