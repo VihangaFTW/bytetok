@@ -4,8 +4,9 @@ Base tokenizer interface for byte-level tokenization implementations.
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Final, TYPE_CHECKING
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import Final, TYPE_CHECKING
 
 from .._sanitise import _render_bytes
 from ..types import Encoding, Token, Vocabulary
@@ -17,7 +18,13 @@ if TYPE_CHECKING:
 
 
 PREFIX: Final[str] = "ByteTok"
-VERSION: Final[str] = "0.2.0"
+try:
+    _version = version("bytetok")
+except PackageNotFoundError:
+    _version = "dev"
+
+
+VERSION: Final[str] = _version
 MODEL_SUFFIX: Final[str] = ".model"
 VOCAB_SUFFIX: Final[str] = ".vocab"
 
@@ -84,7 +91,7 @@ class Tokenizer(ABC):
         """Return the number of tokens in the vocabulary."""
         return len(self.vocab)
 
-    def save(self, file_prefix: str, reg_pat: str = "") -> None:
+    def save(self, file_prefix: str) -> None:
         """
         Save tokenizer state to disk.
 
@@ -92,7 +99,6 @@ class Tokenizer(ABC):
         with human-readable token representations.
 
         :param file_prefix: Path prefix for output files.
-        :param reg_pat: Optional regex pattern for text splitting.
         :raises TrainingError: If the tokenizer has not been trained yet.
         """
         if not self.merges:
@@ -102,7 +108,7 @@ class Tokenizer(ABC):
         log.info(f"saving tokenizer to {file_prefix}")
 
         # write merge pair -> merge token mappings for loading model in future
-        self._save_model(file_prefix, reg_pat)
+        self._save_model(file_prefix)
 
         # write token -> text vocabulary for human readability
         self._save_vocab(file_prefix)
@@ -278,7 +284,7 @@ class Tokenizer(ABC):
         log.debug(f"built vocabulary with {len(vocab)} tokens")
         return vocab
 
-    def _save_model(self, file_prefix: str, reg_pat: str = "") -> None:
+    def _save_model(self, file_prefix: str) -> None:
         """Persist merge mappings and special tokens to a .model file."""
 
         model_path = Path(file_prefix).with_suffix(MODEL_SUFFIX)
@@ -294,8 +300,8 @@ class Tokenizer(ABC):
             # header: version, tokenizer type, regex pattern if exists
             f.write(f"{PREFIX} {VERSION}\n")
             f.write(f"type {self.TOKENIZER_TYPE}\n")
-            if reg_pat:
-                f.write(f"re {reg_pat}\n")
+            if self.pat:
+                f.write(f"re {self.pat}\n")
             else:
                 f.write("re \n")
             # start of special tokens marker

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Ports Python-side text preprocessing in the training algorithm to Rust for faster training times.
 
+## [0.2.1] - 2026-02-28
+
+### Fixed
+
+- `save()` now uses the regex pattern from tokenizer state (`self.pat`) instead of requiring a `reg_pat` parameter. The pattern is persisted and restored correctly via `load()`.
+
 ## [0.2.0] - 2026-02-20
 
 ### Added
