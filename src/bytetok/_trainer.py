@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import logging
 
 from bytetok.errors import TrainingError
+from ._progress import _is_enabled
 
 from .types import (
     Token,
@@ -12,6 +13,7 @@ from .types import (
     Vocabulary,
 )
 from .bpe import RustBPETrainer
+from tqdm import tqdm
 
 log = logging.getLogger(__name__)
 
@@ -37,7 +39,15 @@ def _train_bpe(
         raise TrainingError("empty token sequence, no training performed")
 
     trainer = RustBPETrainer(tokens, 256)
-    trainer.train(n_merges)
+
+    for i in tqdm(
+        range(n_merges), desc="Training", unit="merge", disable=not _is_enabled()
+    ):
+        merged = trainer.merge_step()
+        if not merged:
+            if verbose:
+                log.info(f"training completed at {i}/{n_merges}")
+            break
 
     merge_history = trainer.get_merge_history()
 
