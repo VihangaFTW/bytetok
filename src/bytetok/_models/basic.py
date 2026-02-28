@@ -27,7 +27,11 @@ class BasicTokenizer(Tokenizer):
 
     @override
     def train(
-        self, text: str | list[str], vocab_size: int, verbose: bool = False
+        self,
+        text: str | list[str],
+        vocab_size: int,
+        verbose: bool = False,
+        show_progress: bool = True,
     ) -> None:
         """
         Train on raw text using byte-level BPE.
@@ -53,7 +57,9 @@ class BasicTokenizer(Tokenizer):
         # merges beyond base byte vocabulary
         n_merges = vocab_size - 256
 
-        result = _train_bpe(tokens, n_merges, verbose=verbose)
+        result = _train_bpe(
+            tokens, n_merges, verbose=verbose, show_progress=show_progress
+        )
 
         if result.n_merges_completed < n_merges:
             log.warning(
@@ -86,6 +92,7 @@ class BasicTokenizer(Tokenizer):
         self,
         texts: list[str],
         strategy: "SpecialTokenStrategy | None" = None,
+        show_progress: bool = True,
     ) -> list[list[Token]]:
         """
         Encode multiple texts in parallel via Rust/Rayon.
@@ -95,4 +102,4 @@ class BasicTokenizer(Tokenizer):
         """
         _ = strategy
         tokenizer = self._get_rust_tokenizer(pattern=r".+")
-        return tokenizer.encode_bytes_batch(texts)
+        return tokenizer.encode_bytes_batch(texts, show_progress=show_progress)

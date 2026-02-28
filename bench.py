@@ -17,11 +17,12 @@ HF_DATASET = "stevez80/Sci-Fi-Books-gutenberg"
 
 
 def load_corpus(num_docs: int | None) -> list[str]:
-    """Load up to `num_docs` documents via dataset indexing."""
+    """Load up to `num_docs` documents via dataset indexing; full dataset when None."""
     print(f"Loading {HF_DATASET} (non-streaming) …")
     ds = load_dataset(HF_DATASET, split="train")
     if num_docs is not None:
         return ds[:num_docs]["text"]
+    return ds["text"]
 
 
 def train_tokenizer(train_text: str, vocab_size: int) -> tuple[RegexTokenizer, float]:

@@ -8,14 +8,9 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Final, TYPE_CHECKING
 
-from tqdm import tqdm
-
 from .._sanitise import _render_bytes
 from ..types import Encoding, Token, Vocabulary
 from ..errors import ModelLoadError, TrainingError, VocabularyError, SpecialTokenError
-
-
-from .._progress import _is_enabled
 
 if TYPE_CHECKING:
     from ..strategy import SpecialTokenStrategy
@@ -60,7 +55,11 @@ class Tokenizer(ABC):
 
     @abstractmethod
     def train(
-        self, text: str | list[str], vocab_size: int, verbose: bool = False
+        self,
+        text: str | list[str],
+        vocab_size: int,
+        verbose: bool = False,
+        show_progress: bool = True,
     ) -> None:
         """Train tokenizer on byte sequence to learn merges up to target vocab size."""
         ...
@@ -75,13 +74,7 @@ class Tokenizer(ABC):
             raise TrainingError(
                 f"{self.__class__.__name__} must be trained before encoding"
             )
-        with tqdm(
-            total=0,
-            desc="Encoding",
-            bar_format="{desc}... {elapsed}",
-            disable=not _is_enabled(),
-        ):
-            return self._encode_impl(text, strategy)
+        return self._encode_impl(text, strategy)
 
     @abstractmethod
     def _encode_impl(
@@ -104,17 +97,11 @@ class Tokenizer(ABC):
             raise TrainingError(
                 f"{self.__class__.__name__} must be trained before decoding"
             )
-        with tqdm(
-            total=0,
-            desc="Decoding",
-            bar_format="{desc}... {elapsed}",
-            disable=not _is_enabled(),
-        ):
-            tokenizer = self._get_rust_tokenizer(pattern=self._get_pattern())
-            try:
-                return tokenizer.decode_tokens(tokens, errors=errors)
-            except ValueError as e:
-                raise VocabularyError("failed to decode") from e
+        tokenizer = self._get_rust_tokenizer(pattern=self._get_pattern())
+        try:
+            return tokenizer.decode_tokens(tokens, errors=errors)
+        except ValueError as e:
+            raise VocabularyError("failed to decode") from e
 
     def vocab_size(self) -> int:
         """Return the number of tokens in the vocabulary."""
@@ -135,18 +122,8 @@ class Tokenizer(ABC):
                 f"{self.__class__.__name__} must be trained before saving"
             )
         log.info(f"saving tokenizer to {file_prefix}")
-
-        with tqdm(
-            total=0,
-            desc=f"Saving {self.__class__.__name__}",
-            bar_format="{desc}... {elapsed}",
-            disable=not _is_enabled(),
-        ):
-            # write merge pair -> merge token mappings for loading model in future
-            self._save_model(file_prefix)
-            # write token -> text vocabulary for human readability
-            self._save_vocab(file_prefix)
-
+        self._save_model(file_prefix)
+        self._save_vocab(file_prefix)
         log.info("tokenizer saved successfully")
 
     def load(self, model_filename: str) -> None:
@@ -171,117 +148,112 @@ class Tokenizer(ABC):
         merges: Encoding = {}
         special_toks: dict[str, Token] = {}
 
-        with tqdm(
-            total=0,
-            desc=f"Loading {self.__class__.__name__}",
-            bar_format="{desc}... {elapsed}",
-            disable=not _is_enabled(),
-        ):
-            with path.open("r", encoding="utf-8") as f:
-                # verify version match
-                model_ver = f.readline().strip().split(" ")[1]
-                if model_ver != VERSION:
+        with path.open("r", encoding="utf-8") as f:
+            # verify version match
+            model_ver = f.readline().strip().split(" ")[1]
+            if model_ver != VERSION:
+                raise ModelLoadError(
+                    "model version mismatch",
+                    version_mismatch=(model_ver, [VERSION]),
+                )
+            # read tokenizer type
+            tok_type = f.readline().strip()
+            if tok_type.startswith("type "):
+                tok_type = tok_type[5:]
+                # validate that loaded type matches current instance type
+                if tok_type != self.TOKENIZER_TYPE:
                     raise ModelLoadError(
-                        "model version mismatch",
-                        version_mismatch=(model_ver, [VERSION]),
-                    )
-                # read tokenizer type
-                tok_type = f.readline().strip()
-                if tok_type.startswith("type "):
-                    tok_type = tok_type[5:]
-                    # validate that loaded type matches current instance type
-                    if tok_type != self.TOKENIZER_TYPE:
-                        raise ModelLoadError(
-                            "tokenizer type mismatch",
-                            type_mismatch=(tok_type, [self.TOKENIZER_TYPE]),
-                        )
-
-                # store split pattern if it exists
-                model_re = f.readline().strip()
-                if model_re.startswith("re ") and len(model_re) > 3:
-                    self.pat = model_re[3:]
-
-                # read and load special tokens
-                start_marker = f.readline().strip()
-                if start_marker != "---":
-                    raise ModelLoadError(
-                        f"start sequence marker missing: (expected ---) (got {start_marker})"
+                        "tokenizer type mismatch",
+                        type_mismatch=(tok_type, [self.TOKENIZER_TYPE]),
                     )
 
-                # parse special token count
-                n_special_tokens = f.readline().strip()
+            # store split pattern if it exists
+            model_re = f.readline().strip()
+            if model_re.startswith("re ") and len(model_re) > 3:
+                self.pat = model_re[3:]
+
+            # read and load special tokens
+            start_marker = f.readline().strip()
+            if start_marker != "---":
+                raise ModelLoadError(
+                    f"start sequence marker missing: (expected ---) (got {start_marker})"
+                )
+
+            # parse special token count
+            n_special_tokens = f.readline().strip()
+            try:
+                n_special_tokens = int(n_special_tokens)
+                if n_special_tokens < 0:
+                    raise ValueError()
+            except ValueError:
+                raise ModelLoadError(f"invalid special token count: {n_special_tokens}")
+
+            log.debug(f"loading {n_special_tokens} special tokens")
+
+            count = 0
+            while count < n_special_tokens:
+                # split from the right as the token sequence might contain whitespace
+                # we dont want the string to be split inside the token sequence
+                sp_tok: list[str] = f.readline().strip().rsplit(maxsplit=1)
+                if len(sp_tok) != 2:
+                    raise ModelLoadError(
+                        f"special token mapping must be delimited by a whitespace: {sp_tok}"
+                    )
                 try:
-                    n_special_tokens = int(n_special_tokens)
-                    if n_special_tokens < 0:
-                        raise ValueError()
+                    # load special token data into tokenizer
+                    special_toks[sp_tok[0]] = int(sp_tok[1])
+                except ValueError:
+                    raise ModelLoadError(f"token is not a number: {sp_tok[1]}")
+
+                count += 1
+
+            end_marker = f.readline().strip()
+            if end_marker != "---":
+                raise ModelLoadError(
+                    f"end sequence marker missing: (expected ---) (got {end_marker})"
+                )
+
+            log.debug(f"{n_special_tokens} special tokens loaded")
+
+            # read and load merges
+            log.debug("loading merge tokens")
+            for line in f:
+                try:
+                    # tokens are stored as strings in file
+                    ctok0, ctok1, mtok = map(int, line.split())
+                    merges[(ctok0, ctok1)] = mtok
                 except ValueError:
                     raise ModelLoadError(
-                        f"invalid special token count: {n_special_tokens}"
+                        f"invalid merge format at line: {line.strip()}"
                     )
 
-                log.debug(f"loading {n_special_tokens} special tokens")
+            log.debug(f"loaded {len(merges)} merge rules")
 
-                count = 0
-                while count < n_special_tokens:
-                    # split from the right as the token sequence might contain whitespace
-                    # we dont want the string to be split inside the token sequence
-                    sp_tok: list[str] = f.readline().strip().rsplit(maxsplit=1)
-                    if len(sp_tok) != 2:
-                        raise ModelLoadError(
-                            f"special token mapping must be delimited by a whitespace: {sp_tok}"
-                        )
-                    try:
-                        # load special token data into tokenizer
-                        special_toks[sp_tok[0]] = int(sp_tok[1])
-                    except ValueError:
-                        raise ModelLoadError(f"token is not a number: {sp_tok[1]}")
+        # Atomically update tokenizer state after successful read.
+        self.special_toks = special_toks
+        self.merges = merges
+        self.vocab = self._build_vocab()
+        self._tokenizer = None
 
-                    count += 1
-
-                end_marker = f.readline().strip()
-                if end_marker != "---":
-                    raise ModelLoadError(
-                        f"end sequence marker missing: (expected ---) (got {end_marker})"
-                    )
-
-                log.debug(f"{n_special_tokens} special tokens loaded")
-
-                # read and load merges
-                log.debug("loading merge tokens")
-                for line in f:
-                    try:
-                        # tokens are stored as strings in file
-                        ctok0, ctok1, mtok = map(int, line.split())
-                        merges[(ctok0, ctok1)] = mtok
-                    except ValueError:
-                        raise ModelLoadError(
-                            f"invalid merge format at line: {line.strip()}"
-                        )
-
-                log.debug(f"loaded {len(merges)} merge rules")
-
-            # atomically update tokenizer state after successful read
-            self.special_toks = special_toks
-            self.merges = merges
-            self.vocab = self._build_vocab()
-            # Invalidate tokenizer cache since model state changed
-            self._tokenizer = None
-
-            log.info(
-                f"model loaded successfully: {len(self.special_toks)} special tokens, {len(self.merges)} merge rules, {len(self.vocab)} total tokens"
-            )
+        log.info(
+            f"model loaded successfully: {len(self.special_toks)} special tokens, {len(self.merges)} merge rules, {len(self.vocab)} total tokens"
+        )
 
     @abstractmethod
     def _encode_batch_impl(
         self,
         texts: list[str],
         strategy: "SpecialTokenStrategy | None" = None,
+        show_progress: bool = True,
     ) -> list[list[Token]]:
         """Subclass-specific batch encoding logic."""
         ...
 
     def encode_batch(
-        self, texts: list[str], strategy: "SpecialTokenStrategy|None" = None
+        self,
+        texts: list[str],
+        strategy: "SpecialTokenStrategy|None" = None,
+        show_progress: bool = True,
     ) -> list[list[Token]]:
         """Encode multiple texts into sequences of tokens in batch."""
         if not self.merges:
@@ -292,20 +264,21 @@ class Tokenizer(ABC):
         if not texts:
             return []
 
-        with tqdm(
-            total=0,
-            desc=f"Encoding {len(texts)} texts",
-            bar_format="...",
-            disable=not _is_enabled(),
-        ):
-            return self._encode_batch_impl(texts, strategy)
+        return self._encode_batch_impl(
+            texts,
+            strategy,
+            show_progress=show_progress,
+        )
 
     def _get_pattern(self) -> str:
         """Return the regex pattern for encoding/decoding; default is r'.+' (match all)."""
         return self.pat or r".+"
 
     def decode_batch(
-        self, token_batch: list[list[Token]], errors: str | None = None
+        self,
+        token_batch: list[list[Token]],
+        errors: str | None = None,
+        show_progress: bool = True,
     ) -> list[str]:
         """
         Decode multiple token sequences in batch via Rust/Rayon.
@@ -319,20 +292,18 @@ class Tokenizer(ABC):
                 f"{self.__class__.__name__} must be trained before decoding"
             )
 
-        with tqdm(
-            total=0,
-            desc=f"Decoding {len(token_batch)} batches",
-            bar_format="{desc}... {elapsed}",
-            disable=not _is_enabled()
-        ):
-            if not token_batch:
-                return []
+        if not token_batch:
+            return []
 
-            tokenizer = self._get_rust_tokenizer(pattern=self._get_pattern())
-            try:
-                return tokenizer.decode_tokens_batch(token_batch, errors=errors)
-            except ValueError as e:
-                raise VocabularyError("failed to decode") from e
+        tokenizer = self._get_rust_tokenizer(pattern=self._get_pattern())
+        try:
+            return tokenizer.decode_tokens_batch(
+                token_batch,
+                errors=errors,
+                show_progress=show_progress,
+            )
+        except ValueError as e:
+            raise VocabularyError("failed to decode") from e
 
     def _build_vocab(self) -> Vocabulary:
         """

@@ -19,8 +19,6 @@ jobs:
       - uses: astral-sh/setup-uv@v4
 
       - name: Install and test
-        env:
-          BYTETOK_DISABLE_PROGRESS: "1"
         run: |
           uv sync --group dev
           uv run maturin develop

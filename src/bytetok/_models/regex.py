@@ -42,7 +42,11 @@ class RegexTokenizer(Tokenizer):
 
     @override
     def train(
-        self, text: str | list[str], vocab_size: int, verbose: bool = False
+        self,
+        text: str | list[str],
+        vocab_size: int,
+        verbose: bool = False,
+        show_progress: bool = True,
     ) -> None:
         """
         Train on regex-split text chunks.
@@ -71,7 +75,9 @@ class RegexTokenizer(Tokenizer):
 
         n_merges = vocab_size - 256
 
-        result = _train_bpe(tokens, n_merges, verbose=verbose)
+        result = _train_bpe(
+            tokens, n_merges, verbose=verbose, show_progress=show_progress
+        )
 
         if result.n_merges_completed < n_merges:
             log.warning(
@@ -122,6 +128,7 @@ class RegexTokenizer(Tokenizer):
         self,
         texts: list[str],
         strategy: "SpecialTokenStrategy | None" = None,
+        show_progress: bool = True,
     ) -> list[list[Token]]:
         """
         Encode many texts in parallel via Rust/Rayon.
@@ -134,7 +141,7 @@ class RegexTokenizer(Tokenizer):
 
         if strategy is None:
             try:
-                return tokenizer.encode_texts(texts)
+                return tokenizer.encode_texts(texts, show_progress=show_progress)
             except ValueError as e:
                 raise TokenizationError("failed to encode texts") from e
 
@@ -148,7 +155,11 @@ class RegexTokenizer(Tokenizer):
 
         try:
             if not allowed_special:
-                return tokenizer.encode_texts(texts)
-            return tokenizer.encode_texts_with_special(texts, allowed_special)
+                return tokenizer.encode_texts(texts, show_progress=show_progress)
+            return tokenizer.encode_texts_with_special(
+                texts,
+                allowed_special,
+                show_progress=show_progress,
+            )
         except ValueError as e:
             raise TokenizationError("failed to encode texts") from e

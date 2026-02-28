@@ -12,10 +12,7 @@ classifiers = [
 ]
 authors = [{ name = "Vihanga Malaviarachchi" }]
 requires-python = ">=3.12"
-dependencies = [
-    "regex",
-    "tqdm>=4.67.3",
-]
+dependencies = ["regex"]
 
 keywords = ["bpe", "tokenizer", "nlp", "byte-pair-encoding"]
 
@@ -38,4 +35,4 @@ python-source = "src"
 module-name = "bytetok._bpe_rs"
 
 [dependency-groups]
-dev = ["maturin>=1.11.5", "matplotlib", "pytest"]
+dev = ["maturin>=1.11.5", "matplotlib", "pytest", "datasets"]

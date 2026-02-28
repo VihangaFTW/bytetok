@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 
+use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle, style::TemplateError};
 use rayon::prelude::*;
 
 use crate::{
@@ -41,7 +42,9 @@ impl BPETokenizer {
     ///
     /// # Errors
     ///
-    /// Returns an error if the regex pattern fails to compile.
+    /// Returns [`TokenizerInitError::InvalidPattern`] if the regex `pattern` fails
+    /// to compile, or [`TokenizerInitError::InvalidSpecialToken`] if a special token
+    /// ID overlaps with an existing vocabulary ID.
     pub(crate) fn new(
         merge_history: impl IntoIterator<Item = ((Token, Token), Token)>,
         pattern: &str,
@@ -72,7 +75,7 @@ impl BPETokenizer {
     ///
     /// # Errors
     ///
-    /// Returns `EncodeError::RegexMatch` if the regex engine fails during
+    /// Returns [`EncodeError::RegexMatch`] if the regex engine fails during
     /// text splitting (e.g. backtracking limit exceeded).
     pub(crate) fn encode_text(&self, text: &str) -> Result<Vec<Token>, EncodeError> {
         if text.is_empty() {
@@ -106,6 +109,7 @@ impl BPETokenizer {
     /// # Arguments
     ///
     /// * `texts` - Slice of text strings to encode.
+    /// * `show_progress` - Whether to display a progress bar during encoding.
     ///
     /// # Returns
     ///
@@ -113,10 +117,29 @@ impl BPETokenizer {
     ///
     /// # Errors
     ///
-    /// Returns the first `EncodeError` encountered during parallel encoding.
-    pub(crate) fn encode_texts(&self, texts: &[&str]) -> Result<Vec<Vec<Token>>, EncodeError> {
+    /// Returns [`EncodeError::RegexMatch`] if the regex engine fails during text
+    /// splitting, or [`EncodeError::ProgressBarSetup`] if the progress bar template
+    /// fails to compile.
+    pub(crate) fn encode_texts(
+        &self,
+        texts: &[&str],
+        show_progress: bool,
+    ) -> Result<Vec<Vec<Token>>, EncodeError> {
+        let pb = if show_progress {
+            match self.progress_bar(texts.len() as u64, "Encoding texts") {
+                Ok(pb) => pb,
+                Err(te) => return Err(EncodeError::ProgressBarSetup(te)),
+            }
+        } else {
+            // create dummy progress bar and force to not render
+            let pb = ProgressBar::new(texts.len() as u64);
+            pb.set_draw_target(indicatif::ProgressDrawTarget::hidden());
+            pb
+        };
+
         texts
             .par_iter()
+            .progress_with(pb)
             .map(|text| self.encode_text(text))
             .collect()
     }
@@ -154,15 +177,38 @@ impl BPETokenizer {
     /// # Arguments
     ///
     /// * `texts` - Slice of text strings to encode without regex splitting.
+    /// * `show_progress` - Whether to display a progress bar during encoding.
     ///
     /// # Returns
     ///
     /// Vector of token sequences in the same order as input texts.
-    pub(crate) fn encode_bytes_batch(&self, texts: &[&str]) -> Vec<Vec<Token>> {
-        texts
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EncodeError::ProgressBarSetup`] if the progress bar template fails
+    /// to compile.
+    pub(crate) fn encode_bytes_batch(
+        &self,
+        texts: &[&str],
+        show_progress: bool,
+    ) -> Result<Vec<Vec<Token>>, EncodeError> {
+        let pb = if show_progress {
+            match self.progress_bar(texts.len() as u64, "Encoding bytes") {
+                Ok(pb) => pb,
+                Err(te) => return Err(EncodeError::ProgressBarSetup(te)),
+            }
+        } else {
+            // create dummy progress bar and force to not render
+            let pb = ProgressBar::new(texts.len() as u64);
+            pb.set_draw_target(indicatif::ProgressDrawTarget::hidden());
+            pb
+        };
+
+        Ok(texts
             .par_iter()
+            .progress_with(pb)
             .map(|text| self.encode_bytes(text))
-            .collect()
+            .collect())
     }
     /// Encode a single text string with special token handling.
     ///
@@ -181,8 +227,8 @@ impl BPETokenizer {
     ///
     /// # Errors
     ///
-    /// Returns `EncodeError::RegexMatch` if the regex engine fails during
-    /// text splitting of a normal segment.
+    /// Returns [`EncodeError::RegexMatch`] if the regex engine fails during text
+    /// splitting of a normal segment.
     pub(crate) fn encode_text_with_special(
         &self,
         text: &str,
@@ -221,6 +267,7 @@ impl BPETokenizer {
     ///
     /// * `texts` - Slice of text strings to encode.
     /// * `allowed_special` - Mapping of special token strings to their token IDs.
+    /// * `show_progress` - Whether to display a progress bar during encoding.
     ///
     /// # Returns
     ///
@@ -228,19 +275,30 @@ impl BPETokenizer {
     ///
     /// # Errors
     ///
-    /// Returns the first `EncodeError` encountered during parallel encoding.
+    /// Returns [`EncodeError::RegexMatch`] if the regex engine fails during text
+    /// splitting, or [`EncodeError::ProgressBarSetup`] if the progress bar template
+    /// fails to compile.
     pub(crate) fn encode_texts_with_special(
         &self,
         texts: &[&str],
         allowed_special: HashMap<String, Token>,
+        show_progress: bool,
     ) -> Result<Vec<Vec<Token>>, EncodeError> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
 
-        if allowed_special.is_empty() {
-            return self.encode_texts(texts);
-        }
+        let pb = if show_progress {
+            match self.progress_bar(texts.len() as u64, "Encoding texts (st)") {
+                Ok(pb) => pb,
+                Err(te) => return Err(EncodeError::ProgressBarSetup(te)),
+            }
+        } else {
+            // create dummy progress bar and force to not render
+            let pb = ProgressBar::new(texts.len() as u64);
+            pb.set_draw_target(indicatif::ProgressDrawTarget::hidden());
+            pb
+        };
 
         let split_segments: Vec<Vec<(String, Option<Token>)>> = texts
             .iter()
@@ -264,6 +322,7 @@ impl BPETokenizer {
         // collect() on a ParallelIterator preserves input order.
         let encoded_normals: Vec<Vec<Token>> = flattened_normal_segs
             .par_iter()
+            .progress_with(pb)
             .map(|t| self.encode_text(t))
             .collect::<Result<_, _>>()?;
 
@@ -296,11 +355,15 @@ impl BPETokenizer {
     ///
     /// # Returns
     ///
-    /// `Ok(String)` containing the decoded text, or `Err(DecodeError)` if:
-    /// - A token ID is not found in the vocabulary (`DecodeError::UnknownToken`)
-    /// - The decoded bytes are not valid UTF-8 (`DecodeError::InvalidUtf8`)
+    /// The decoded text as a `String`.
     ///
-    /// # Example
+    /// # Errors
+    ///
+    /// Returns [`DecodeError::UnknownToken`] if a token ID is not found in the
+    /// vocabulary, or [`DecodeError::InvalidUtf8`] if the decoded bytes are not
+    /// valid UTF-8 (only in `Strict` mode).
+    ///
+    /// # Examples
     ///
     /// ```ignore
     /// let tokenizer = BPETokenizer::new(...)?;
@@ -328,24 +391,39 @@ impl BPETokenizer {
     ///
     /// * `token_seqs` - Slice of token sequences to decode.
     /// * `errors` - How to handle invalid UTF-8 in decoded bytes.
+    /// * `show_progress` - Whether to display a progress bar during encoding.
     ///
     /// # Returns
     ///
-    /// `Ok(Vec<String>)` containing decoded strings in the same order as input, or
-    /// `Err(DecodeError)` if any sequence fails to decode (e.g., unknown token or invalid UTF-8).
+    /// Decoded strings in the same order as input.
     ///
     /// # Errors
     ///
-    /// Returns the first error encountered during parallel decoding:
-    /// - `DecodeError::UnknownToken` if a token ID is not in the vocabulary
-    /// - `DecodeError::InvalidUtf8` if decoded bytes are not valid UTF-8
+    /// Returns [`DecodeError::UnknownToken`] if a token ID is not found in the
+    /// vocabulary, [`DecodeError::InvalidUtf8`] if the decoded bytes are not valid
+    /// UTF-8 (only in `Strict` mode), or [`DecodeError::ProgressBarSetup`] if the
+    /// progress bar template fails to compile.
     pub(crate) fn decode_tokens_batch(
         &self,
         token_seqs: &[&[Token]],
         errors: ErrorMode,
+        show_progress: bool,
     ) -> Result<Vec<String>, DecodeError> {
+        let pb = if show_progress {
+            match self.progress_bar(token_seqs.len() as u64, "Decoding tokens") {
+                Ok(pb) => pb,
+                Err(te) => return Err(DecodeError::ProgressBarSetup(te)),
+            }
+        } else {
+            // create dummy progress bar and force to not render
+            let pb = ProgressBar::new(token_seqs.len() as u64);
+            pb.set_draw_target(indicatif::ProgressDrawTarget::hidden());
+            pb
+        };
+
         token_seqs
             .par_iter()
+            .progress_with(pb)
             .map(|tokens| self.decode_tokens(tokens, errors))
             .collect()
     }
@@ -404,7 +482,7 @@ impl BPETokenizer {
     ///
     /// # Errors
     ///
-    /// Returns `EncodeError::RegexMatch` if the special-token pattern fails
+    /// Returns [`EncodeError::RegexMatch`] if the special-token pattern fails
     /// to compile or a match error occurs during scanning.
     fn split_on_special_tokens(
         &self,
@@ -445,10 +523,43 @@ impl BPETokenizer {
 
         Ok(segments)
     }
+
+    /// Creates a styled progress bar with elapsed time, a fixed-width message label, and position/total counters.
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - The total number of steps the progress bar represents.
+    /// * `msg` - The message label displayed alongside the progress bar.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`TemplateError`] if the progress bar style template is invalid.
+    fn progress_bar(
+        &self,
+        size: u64,
+        msg: impl Into<String>,
+    ) -> Result<ProgressBar, TemplateError> {
+        let pb = ProgressBar::new(size);
+
+        let style = match ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] {msg:<30!} {wide_bar} {pos}/{len}")
+        {
+            Ok(ps) => ps,
+            Err(te) => return Err(te),
+        };
+
+        pb.set_style(style);
+        pb.set_message(msg.into());
+        pb.enable_steady_tick(std::time::Duration::from_secs(1));
+
+        Ok(pb)
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use core::panic;
+
     use super::*;
     use crate::error::SpecialTokenError;
 
@@ -463,7 +574,7 @@ mod tests {
     fn test_encode_text_no_merges() {
         // Pattern splits on whitespace-separated words
         let tok = make_tokenizer(vec![], r"\S+");
-        let result = tok.encode_text("ab cd").expect("encoding failed");
+        let result = tok.encode_text("ab cd").expect("text should be encodable");
         // No merges → raw UTF-8 bytes
         assert_eq!(result, vec![97, 98, 99, 100]);
     }
@@ -472,7 +583,7 @@ mod tests {
     fn test_encode_text_with_merges() {
         // Merge (97, 98) → 256 i.e. 'a','b' → 256
         let tok = make_tokenizer(vec![((97, 98), 256)], r"\S+");
-        let result = tok.encode_text("ab cd").expect("encoding failed");
+        let result = tok.encode_text("ab cd").expect("text should be encodable");
         // "ab" → [256], "cd" → [99, 100]
         assert_eq!(result, vec![256, 99, 100]);
     }
@@ -481,7 +592,7 @@ mod tests {
     fn test_encode_texts_parallel() {
         let tok = make_tokenizer(vec![((97, 98), 256)], r"\S+");
         let texts = &["ab", "cd", "ab"];
-        let results = tok.encode_texts(texts).expect("encoding failed");
+        let results = tok.encode_texts(texts, false).expect("texts should be batch-encodable");
         assert_eq!(results, vec![vec![256], vec![99, 100], vec![256]]);
     }
 
@@ -497,7 +608,7 @@ mod tests {
     fn test_empty_text() {
         let tok = make_tokenizer(vec![], r"\S+");
         assert_eq!(
-            tok.encode_text("").expect("encoding failed"),
+            tok.encode_text("").expect("text should be encodable"),
             Vec::<Token>::new()
         );
     }
@@ -506,7 +617,7 @@ mod tests {
     fn test_single_byte_chunk() {
         let tok = make_tokenizer(vec![((97, 98), 256)], r".");
         // Each character is its own chunk; no pairs to merge within a chunk
-        let result = tok.encode_text("ab").expect("encoding failed");
+        let result = tok.encode_text("ab").expect("text should be encodable");
         assert_eq!(result, vec![97, 98]);
     }
 
@@ -514,7 +625,7 @@ mod tests {
     fn test_unicode_bytes() {
         // 'é' is U+00E9, encoded as [0xC3, 0xA9] in UTF-8
         let tok = make_tokenizer(vec![((0xC3, 0xA9), 256)], r"\S+");
-        let result = tok.encode_text("é").expect("encoding failed");
+        let result = tok.encode_text("é").expect("text should be encodable");
         assert_eq!(result, vec![256]);
     }
 
@@ -522,7 +633,7 @@ mod tests {
     fn test_lookahead_pattern() {
         // Pattern with negative lookahead.
         let tok = make_tokenizer(vec![], r"\s+(?!\S)|\S+|\s+");
-        let result = tok.encode_text("hello world").expect("encoding failed");
+        let result = tok.encode_text("hello world").expect("text should be encodable");
         // "hello" → [104,101,108,108,111], " " → [32], "world" → [119,111,114,108,100]
         assert_eq!(
             result,
@@ -534,8 +645,11 @@ mod tests {
     fn test_encode_bytes_batch_parallel() {
         let tok = make_tokenizer(vec![((97, 98), 256)], r"\S+");
         let texts = &["ab", "cd"];
-        let results = tok.encode_bytes_batch(texts);
-        assert_eq!(results, vec![vec![256], vec![99, 100]]);
+        let results = tok.encode_bytes_batch(texts, false);
+        match results {
+            Ok(res) => assert_eq!(res, vec![vec![256], vec![99, 100]]),
+            Err(e) => panic!("{}", e),
+        }
     }
 
     #[test]
@@ -544,7 +658,7 @@ mod tests {
         // Token 256 = "ab"
         let decoded = tok
             .decode_tokens(&[256, 99], ErrorMode::Strict)
-            .expect("decoding failed");
+            .expect("tokens should be decodable to a string");
         assert_eq!(decoded, "abc");
     }
 
@@ -554,7 +668,7 @@ mod tests {
         // Raw UTF-8 bytes for "hello"
         let decoded = tok
             .decode_tokens(&[104, 101, 108, 108, 111], ErrorMode::Strict)
-            .expect("decoding failed");
+            .expect("tokens should be decodable to a string");
         assert_eq!(decoded, "hello");
     }
 
@@ -565,8 +679,8 @@ mod tests {
         let seq2 = vec![99, 100];
         let token_seqs: Vec<&[Token]> = vec![&seq1, &seq2];
         let decoded = tok
-            .decode_tokens_batch(&token_seqs, ErrorMode::Strict)
-            .expect("batch decoding failed");
+            .decode_tokens_batch(&token_seqs, ErrorMode::Strict, false)
+            .expect("token sequences should be batch-decodable to strings");
         assert_eq!(decoded, vec!["ab", "cd"]);
     }
 
@@ -574,10 +688,10 @@ mod tests {
     fn test_encode_decode_round_trip() {
         let tok = make_tokenizer(vec![((97, 98), 256), ((256, 99), 257)], r"\S+");
         let original = "abc def";
-        let encoded = tok.encode_text(original).expect("encoding failed");
+        let encoded = tok.encode_text(original).expect("text should be encodable");
         let decoded = tok
             .decode_tokens(&encoded, ErrorMode::Strict)
-            .expect("decoding failed");
+            .expect("tokens should be decodable to a string");
         assert_eq!(decoded, "abcdef"); // Note: spaces are removed by \S+ pattern
     }
 
