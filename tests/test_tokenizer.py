@@ -1,7 +1,6 @@
 """Unit tests for ByteTok tokenizer encode/decode, edge cases, and serialization."""
 
 import pytest
-from types import SimpleNamespace
 
 import bytetok as btok
 from bytetok.errors import TrainingError
@@ -159,4 +158,3 @@ def test_encode_batch_decode_batch(regex_tokenizer):
 def test_vocab_size_after_training(regex_tokenizer):
     """Vocab size is at least 256 after training."""
     assert regex_tokenizer.vocab_size() >= 256
-

@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `indicatif` as a Rust dependency for progress tracking.
 - Added progress indicator logic for training, batch encode, and batch decode operations, including special-token workflows.
 - Updated `Cargo.toml` with library metadata (`license`, `repository`, `homepage`, and `documentation`).
+- Updated tokenzier model versioning logic to mirror package version automatically.
 
 ### Removed
 
