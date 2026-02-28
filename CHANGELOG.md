@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Ports Python-side text preprocessing in the training algorithm to Rust for faster training times.
 
+## [0.2.1] - 2026-03-01
+
+### Added
+
+- Optional terminal progress indicators for training and batch encode/decode operations.
+
+### Fixed
+
+- `save()` now uses the tokenizer’s stored regex pattern (`self.pat`) instead of requiring a `reg_pat` parameter. The pattern is now persisted and restored correctly by `load()`.
+
+### Changed
+
+- Converted Rust extension public API docs to reStructuredText to align with Python-side docs.
+- Added `indicatif` as a Rust dependency for progress tracking.
+- Added progress indicator logic for training, batch encode, and batch decode operations, including special-token workflows.
+- Updated `Cargo.toml` with library metadata (`license`, `repository`, `homepage`, and `documentation`).
+- Updated tokenzier model versioning logic to mirror package version automatically.
+
+### Removed
+
+- Removed the `_decorators` module; training time visibility is now provided by progress indicators.
+
 ## [0.2.0] - 2026-02-20
 
 ### Added
@@ -32,7 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated README quick start section with examples on parallel encoding and special token workflows.
 - Improved encoding and decoding performance across single-text, batch, and special-token workloads.
 
-![Benchmark comparison](assets/v020_bench.png)
+![Benchmark comparison](assets/v0-2-0_bench.png)
 
 ### Removed
 

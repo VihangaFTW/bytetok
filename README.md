@@ -135,10 +135,10 @@ tokenizer.train("your training corpus here...", vocab_size=1000)
 
 # Encode a batch of texts in parallel.
 texts = ["First document...", "Second document...", "Third document..."]
-encoded = tokenizer.encode_batch(texts)
+encoded = tokenizer.encode_batch(texts, show_progress=False)
 
 # Decode the batch in parallel.
-decoded = tokenizer.decode_batch(encoded, errors="replace")
+decoded = tokenizer.decode_batch(encoded, errors="replace", show_progress=False)
 assert decoded[0] == "First document..."
 ```
 
