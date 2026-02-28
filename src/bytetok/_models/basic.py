@@ -99,6 +99,8 @@ class BasicTokenizer(Tokenizer):
 
         The ``strategy`` argument is ignored; this tokenizer does not support
         special token handling.
+
+        :raises TokenizationError: If Rust-side batch encoding fails.
         """
         _ = strategy
         tokenizer = self._get_rust_tokenizer(pattern=r".+")
