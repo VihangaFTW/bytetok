@@ -48,7 +48,7 @@ def _train_bpe(
     try:
         trainer.train(n_merges, show_progress=show_progress)
     except ValueError as e:
-        raise TrainingError("internal error") from e
+        raise TrainingError(f"internal error: {e}") from e
 
     merge_history = trainer.get_merge_history()
 

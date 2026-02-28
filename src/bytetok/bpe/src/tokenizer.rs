@@ -125,23 +125,20 @@ impl BPETokenizer {
         texts: &[&str],
         show_progress: bool,
     ) -> Result<Vec<Vec<Token>>, EncodeError> {
-        let pb = if show_progress {
-            match self.progress_bar(texts.len() as u64, "Encoding texts") {
+        if show_progress {
+            let pb = match self.progress_bar(texts.len() as u64, "Encoding texts") {
                 Ok(pb) => pb,
                 Err(te) => return Err(EncodeError::ProgressBarSetup(te)),
-            }
-        } else {
-            // create dummy progress bar and force to not render
-            let pb = ProgressBar::new(texts.len() as u64);
-            pb.set_draw_target(indicatif::ProgressDrawTarget::hidden());
-            pb
-        };
+            };
 
-        texts
-            .par_iter()
-            .progress_with(pb)
-            .map(|text| self.encode_text(text))
-            .collect()
+            texts
+                .par_iter()
+                .progress_with(pb)
+                .map(|text| self.encode_text(text))
+                .collect()
+        } else {
+            texts.par_iter().map(|text| self.encode_text(text)).collect()
+        }
     }
 
     /// Encode raw text as bytes → BPE without regex splitting.
@@ -192,23 +189,20 @@ impl BPETokenizer {
         texts: &[&str],
         show_progress: bool,
     ) -> Result<Vec<Vec<Token>>, EncodeError> {
-        let pb = if show_progress {
-            match self.progress_bar(texts.len() as u64, "Encoding bytes") {
+        if show_progress {
+            let pb = match self.progress_bar(texts.len() as u64, "Encoding bytes") {
                 Ok(pb) => pb,
                 Err(te) => return Err(EncodeError::ProgressBarSetup(te)),
-            }
-        } else {
-            // create dummy progress bar and force to not render
-            let pb = ProgressBar::new(texts.len() as u64);
-            pb.set_draw_target(indicatif::ProgressDrawTarget::hidden());
-            pb
-        };
+            };
 
-        Ok(texts
-            .par_iter()
-            .progress_with(pb)
-            .map(|text| self.encode_bytes(text))
-            .collect())
+            Ok(texts
+                .par_iter()
+                .progress_with(pb)
+                .map(|text| self.encode_bytes(text))
+                .collect())
+        } else {
+            Ok(texts.par_iter().map(|text| self.encode_bytes(text)).collect())
+        }
     }
     /// Encode a single text string with special token handling.
     ///
@@ -287,18 +281,9 @@ impl BPETokenizer {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
-
-        let pb = if show_progress {
-            match self.progress_bar(texts.len() as u64, "Encoding texts (st)") {
-                Ok(pb) => pb,
-                Err(te) => return Err(EncodeError::ProgressBarSetup(te)),
-            }
-        } else {
-            // create dummy progress bar and force to not render
-            let pb = ProgressBar::new(texts.len() as u64);
-            pb.set_draw_target(indicatif::ProgressDrawTarget::hidden());
-            pb
-        };
+        if allowed_special.is_empty() {
+            return self.encode_texts(texts, show_progress);
+        }
 
         let split_segments: Vec<Vec<(String, Option<Token>)>> = texts
             .iter()
@@ -320,11 +305,23 @@ impl BPETokenizer {
 
         // encode every normal segment in one parallel Rayon batch.
         // collect() on a ParallelIterator preserves input order.
-        let encoded_normals: Vec<Vec<Token>> = flattened_normal_segs
-            .par_iter()
-            .progress_with(pb)
-            .map(|t| self.encode_text(t))
-            .collect::<Result<_, _>>()?;
+        let encoded_normals: Vec<Vec<Token>> = if show_progress {
+            let pb = match self.progress_bar(flattened_normal_segs.len() as u64, "Encoding texts (st)") {
+                Ok(pb) => pb,
+                Err(te) => return Err(EncodeError::ProgressBarSetup(te)),
+            };
+
+            flattened_normal_segs
+                .par_iter()
+                .progress_with(pb)
+                .map(|t| self.encode_text(t))
+                .collect::<Result<_, _>>()?
+        } else {
+            flattened_normal_segs
+                .par_iter()
+                .map(|t| self.encode_text(t))
+                .collect::<Result<_, _>>()?
+        };
 
         // reassemble per-text token sequences.
         let mut normal_idx = 0;
@@ -391,7 +388,7 @@ impl BPETokenizer {
     ///
     /// * `token_seqs` - Slice of token sequences to decode.
     /// * `errors` - How to handle invalid UTF-8 in decoded bytes.
-    /// * `show_progress` - Whether to display a progress bar during encoding.
+    /// * `show_progress` - Whether to display a progress bar during decoding.
     ///
     /// # Returns
     ///
@@ -409,23 +406,23 @@ impl BPETokenizer {
         errors: ErrorMode,
         show_progress: bool,
     ) -> Result<Vec<String>, DecodeError> {
-        let pb = if show_progress {
-            match self.progress_bar(token_seqs.len() as u64, "Decoding tokens") {
+        if show_progress {
+            let pb = match self.progress_bar(token_seqs.len() as u64, "Decoding tokens") {
                 Ok(pb) => pb,
                 Err(te) => return Err(DecodeError::ProgressBarSetup(te)),
-            }
-        } else {
-            // create dummy progress bar and force to not render
-            let pb = ProgressBar::new(token_seqs.len() as u64);
-            pb.set_draw_target(indicatif::ProgressDrawTarget::hidden());
-            pb
-        };
+            };
 
-        token_seqs
-            .par_iter()
-            .progress_with(pb)
-            .map(|tokens| self.decode_tokens(tokens, errors))
-            .collect()
+            token_seqs
+                .par_iter()
+                .progress_with(pb)
+                .map(|tokens| self.decode_tokens(tokens, errors))
+                .collect()
+        } else {
+            token_seqs
+                .par_iter()
+                .map(|tokens| self.decode_tokens(tokens, errors))
+                .collect()
+        }
     }
 
     /// Returns the vocabulary size (number of tokens).
@@ -648,7 +645,7 @@ mod tests {
         let results = tok.encode_bytes_batch(texts, false);
         match results {
             Ok(res) => assert_eq!(res, vec![vec![256], vec![99, 100]]),
-            Err(e) => panic!("{}", e),
+            Err(e) => panic!("{e}"),
         }
     }
 

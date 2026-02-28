@@ -4,7 +4,7 @@ from typing import override, TYPE_CHECKING
 from .base import Tokenizer
 import logging
 
-from ..errors import VocabularyError
+from ..errors import TokenizationError, VocabularyError
 
 from ..types import Token
 from .._trainer import _train_bpe
@@ -102,4 +102,7 @@ class BasicTokenizer(Tokenizer):
         """
         _ = strategy
         tokenizer = self._get_rust_tokenizer(pattern=r".+")
-        return tokenizer.encode_bytes_batch(texts, show_progress=show_progress)
+        try:
+            return tokenizer.encode_bytes_batch(texts, show_progress=show_progress)
+        except ValueError as e:
+            raise TokenizationError("failed to encode texts") from e
