@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Ports Python-side text preprocessing in the training algorithm to Rust for faster training times.
 
+## [0.2.2] - 2026-03-02
+
+### Fixed
+
+- Ensured `indicatif` progress resources are properly cleaned up after batch operations.
+
 ## [0.2.1] - 2026-03-01
 
 ### Added

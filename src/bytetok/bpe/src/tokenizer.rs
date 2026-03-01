@@ -131,11 +131,13 @@ impl BPETokenizer {
                 Err(te) => return Err(EncodeError::ProgressBarSetup(te)),
             };
 
-            texts
+            let result = texts
                 .par_iter()
-                .progress_with(pb)
+                .progress_with(pb.clone())
                 .map(|text| self.encode_text(text))
-                .collect()
+                .collect();
+            pb.finish_and_clear();
+            result
         } else {
             texts.par_iter().map(|text| self.encode_text(text)).collect()
         }
@@ -195,11 +197,13 @@ impl BPETokenizer {
                 Err(te) => return Err(EncodeError::ProgressBarSetup(te)),
             };
 
-            Ok(texts
+            let result = texts
                 .par_iter()
-                .progress_with(pb)
+                .progress_with(pb.clone())
                 .map(|text| self.encode_bytes(text))
-                .collect())
+                .collect();
+            pb.finish_and_clear();
+            Ok(result)
         } else {
             Ok(texts.par_iter().map(|text| self.encode_bytes(text)).collect())
         }
@@ -311,11 +315,13 @@ impl BPETokenizer {
                 Err(te) => return Err(EncodeError::ProgressBarSetup(te)),
             };
 
-            flattened_normal_segs
+            let result = flattened_normal_segs
                 .par_iter()
-                .progress_with(pb)
+                .progress_with(pb.clone())
                 .map(|t| self.encode_text(t))
-                .collect::<Result<_, _>>()?
+                .collect::<Result<_, _>>()?;
+            pb.finish_and_clear();
+            result
         } else {
             flattened_normal_segs
                 .par_iter()
@@ -412,11 +418,13 @@ impl BPETokenizer {
                 Err(te) => return Err(DecodeError::ProgressBarSetup(te)),
             };
 
-            token_seqs
+            let result = token_seqs
                 .par_iter()
-                .progress_with(pb)
+                .progress_with(pb.clone())
                 .map(|tokens| self.decode_tokens(tokens, errors))
-                .collect()
+                .collect();
+            pb.finish_and_clear();
+            result
         } else {
             token_seqs
                 .par_iter()
