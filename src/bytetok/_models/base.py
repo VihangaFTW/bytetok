@@ -4,8 +4,9 @@ Base tokenizer interface for byte-level tokenization implementations.
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Final, TYPE_CHECKING
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import Final, TYPE_CHECKING
 
 from .._sanitise import _render_bytes
 from ..types import Encoding, Token, Vocabulary
@@ -17,7 +18,13 @@ if TYPE_CHECKING:
 
 
 PREFIX: Final[str] = "ByteTok"
-VERSION: Final[str] = "0.2.0"
+try:
+    _version = version("bytetok")
+except PackageNotFoundError:
+    _version = "dev"
+
+
+VERSION: Final[str] = _version
 MODEL_SUFFIX: Final[str] = ".model"
 VOCAB_SUFFIX: Final[str] = ".vocab"
 
@@ -48,18 +55,34 @@ class Tokenizer(ABC):
 
     @abstractmethod
     def train(
-        self, text: str | list[str], vocab_size: int, verbose: bool = False
+        self,
+        text: str | list[str],
+        vocab_size: int,
+        verbose: bool = False,
+        show_progress: bool = True,
     ) -> None:
         """Train tokenizer on byte sequence to learn merges up to target vocab size."""
         ...
 
-    @abstractmethod
     def encode(
         self,
         text: str,
         strategy: "SpecialTokenStrategy | None" = None,
     ) -> list[Token]:
         """Encode text into a sequence of tokens."""
+        if not self.merges:
+            raise TrainingError(
+                f"{self.__class__.__name__} must be trained before encoding"
+            )
+        return self._encode_impl(text, strategy)
+
+    @abstractmethod
+    def _encode_impl(
+        self,
+        text: str,
+        strategy: "SpecialTokenStrategy | None" = None,
+    ) -> list[Token]:
+        """Subclass-specific single-text encoding logic."""
         ...
 
     def decode(self, tokens: list[Token], errors: str | None = None) -> str:
@@ -84,7 +107,7 @@ class Tokenizer(ABC):
         """Return the number of tokens in the vocabulary."""
         return len(self.vocab)
 
-    def save(self, file_prefix: str, reg_pat: str = "") -> None:
+    def save(self, file_prefix: str) -> None:
         """
         Save tokenizer state to disk.
 
@@ -92,7 +115,6 @@ class Tokenizer(ABC):
         with human-readable token representations.
 
         :param file_prefix: Path prefix for output files.
-        :param reg_pat: Optional regex pattern for text splitting.
         :raises TrainingError: If the tokenizer has not been trained yet.
         """
         if not self.merges:
@@ -100,13 +122,8 @@ class Tokenizer(ABC):
                 f"{self.__class__.__name__} must be trained before saving"
             )
         log.info(f"saving tokenizer to {file_prefix}")
-
-        # write merge pair -> merge token mappings for loading model in future
-        self._save_model(file_prefix, reg_pat)
-
-        # write token -> text vocabulary for human readability
+        self._save_model(file_prefix)
         self._save_vocab(file_prefix)
-
         log.info("tokenizer saved successfully")
 
     def load(self, model_filename: str) -> None:
@@ -212,11 +229,10 @@ class Tokenizer(ABC):
 
             log.debug(f"loaded {len(merges)} merge rules")
 
-        # atomically update tokenizer state after successful read
+        # Atomically update tokenizer state after successful read.
         self.special_toks = special_toks
         self.merges = merges
         self.vocab = self._build_vocab()
-        # Invalidate tokenizer cache since model state changed
         self._tokenizer = None
 
         log.info(
@@ -224,20 +240,45 @@ class Tokenizer(ABC):
         )
 
     @abstractmethod
-    def encode_batch(
+    def _encode_batch_impl(
         self,
         texts: list[str],
         strategy: "SpecialTokenStrategy | None" = None,
+        show_progress: bool = True,
+    ) -> list[list[Token]]:
+        """Subclass-specific batch encoding logic."""
+        ...
+
+    def encode_batch(
+        self,
+        texts: list[str],
+        strategy: "SpecialTokenStrategy|None" = None,
+        show_progress: bool = True,
     ) -> list[list[Token]]:
         """Encode multiple texts into sequences of tokens in batch."""
-        ...
+        if not self.merges:
+            raise TrainingError(
+                f"{self.__class__.__name__} must be trained before encoding"
+            )
+
+        if not texts:
+            return []
+
+        return self._encode_batch_impl(
+            texts,
+            strategy,
+            show_progress=show_progress,
+        )
 
     def _get_pattern(self) -> str:
         """Return the regex pattern for encoding/decoding; default is r'.+' (match all)."""
         return self.pat or r".+"
 
     def decode_batch(
-        self, token_batch: list[list[Token]], errors: str | None = None
+        self,
+        token_batch: list[list[Token]],
+        errors: str | None = None,
+        show_progress: bool = True,
     ) -> list[str]:
         """
         Decode multiple token sequences in batch via Rust/Rayon.
@@ -250,11 +291,17 @@ class Tokenizer(ABC):
             raise TrainingError(
                 f"{self.__class__.__name__} must be trained before decoding"
             )
+
         if not token_batch:
             return []
+
         tokenizer = self._get_rust_tokenizer(pattern=self._get_pattern())
         try:
-            return tokenizer.decode_tokens_batch(token_batch, errors=errors)
+            return tokenizer.decode_tokens_batch(
+                token_batch,
+                errors=errors,
+                show_progress=show_progress,
+            )
         except ValueError as e:
             raise VocabularyError("failed to decode") from e
 
@@ -278,7 +325,7 @@ class Tokenizer(ABC):
         log.debug(f"built vocabulary with {len(vocab)} tokens")
         return vocab
 
-    def _save_model(self, file_prefix: str, reg_pat: str = "") -> None:
+    def _save_model(self, file_prefix: str) -> None:
         """Persist merge mappings and special tokens to a .model file."""
 
         model_path = Path(file_prefix).with_suffix(MODEL_SUFFIX)
@@ -294,8 +341,8 @@ class Tokenizer(ABC):
             # header: version, tokenizer type, regex pattern if exists
             f.write(f"{PREFIX} {VERSION}\n")
             f.write(f"type {self.TOKENIZER_TYPE}\n")
-            if reg_pat:
-                f.write(f"re {reg_pat}\n")
+            if self.pat:
+                f.write(f"re {self.pat}\n")
             else:
                 f.write("re \n")
             # start of special tokens marker

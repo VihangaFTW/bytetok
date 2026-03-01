@@ -1,6 +1,6 @@
 [project]
 name = "bytetok"
-version = "0.2.0"
+version = "0.2.1"
 description = "A fast, modular and light-weight BPE tokenizer for NLP research and prototyping."
 readme = "README.md"
 license = { text = "MIT" }
@@ -35,4 +35,4 @@ python-source = "src"
 module-name = "bytetok._bpe_rs"
 
 [dependency-groups]
-dev = ["maturin>=1.11.5", "matplotlib", "pytest"]
+dev = ["maturin>=1.11.5", "matplotlib", "pytest", "datasets"]

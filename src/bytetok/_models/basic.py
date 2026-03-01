@@ -2,10 +2,9 @@
 
 from typing import override, TYPE_CHECKING
 from .base import Tokenizer
-from .._decorators import measure_time
 import logging
 
-from ..errors import VocabularyError, TrainingError
+from ..errors import VocabularyError
 
 from ..types import Token
 from .._trainer import _train_bpe
@@ -27,9 +26,12 @@ class BasicTokenizer(Tokenizer):
         super().__init__()
 
     @override
-    @measure_time
     def train(
-        self, text: str | list[str], vocab_size: int, verbose: bool = False
+        self,
+        text: str | list[str],
+        vocab_size: int,
+        verbose: bool = False,
+        show_progress: bool = True,
     ) -> None:
         """
         Train on raw text using byte-level BPE.
@@ -55,7 +57,9 @@ class BasicTokenizer(Tokenizer):
         # merges beyond base byte vocabulary
         n_merges = vocab_size - 256
 
-        result = _train_bpe(tokens, n_merges, verbose=verbose)
+        result = _train_bpe(
+            tokens, n_merges, verbose=verbose, show_progress=show_progress
+        )
 
         if result.n_merges_completed < n_merges:
             log.warning(
@@ -68,7 +72,7 @@ class BasicTokenizer(Tokenizer):
         self._tokenizer = None
 
     @override
-    def encode(
+    def _encode_impl(
         self,
         text: str,
         strategy: "SpecialTokenStrategy | None" = None,
@@ -80,18 +84,15 @@ class BasicTokenizer(Tokenizer):
         special token handling.
         """
         _ = strategy
-        if not self.merges:
-            raise TrainingError(
-                f"{self.__class__.__name__} must be trained before encoding"
-            )
         tokenizer = self._get_rust_tokenizer(pattern=r".+")
         return tokenizer.encode_bytes(text)
 
     @override
-    def encode_batch(
+    def _encode_batch_impl(
         self,
         texts: list[str],
         strategy: "SpecialTokenStrategy | None" = None,
+        show_progress: bool = True,
     ) -> list[list[Token]]:
         """
         Encode multiple texts in parallel via Rust/Rayon.
@@ -100,11 +101,5 @@ class BasicTokenizer(Tokenizer):
         special token handling.
         """
         _ = strategy
-        if not self.merges:
-            raise TrainingError(
-                f"{self.__class__.__name__} must be trained before encoding"
-            )
-        if not texts:
-            return []
         tokenizer = self._get_rust_tokenizer(pattern=r".+")
-        return tokenizer.encode_bytes_batch(texts)
+        return tokenizer.encode_bytes_batch(texts, show_progress=show_progress)

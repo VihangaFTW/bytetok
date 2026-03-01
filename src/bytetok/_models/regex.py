@@ -5,11 +5,10 @@ import logging
 from typing import override
 
 
-from ..errors import TokenizationError, VocabularyError, TrainingError
+from ..errors import TokenizationError, VocabularyError
 from ..pattern import TokenPattern
 from ..strategy import SpecialTokenStrategy
 
-from .._decorators import measure_time
 from ..types import (
     Token,
 )
@@ -42,9 +41,12 @@ class RegexTokenizer(Tokenizer):
         super().load(model_filename)
 
     @override
-    @measure_time
     def train(
-        self, text: str | list[str], vocab_size: int, verbose: bool = False
+        self,
+        text: str | list[str],
+        vocab_size: int,
+        verbose: bool = False,
+        show_progress: bool = True,
     ) -> None:
         """
         Train on regex-split text chunks.
@@ -73,7 +75,9 @@ class RegexTokenizer(Tokenizer):
 
         n_merges = vocab_size - 256
 
-        result = _train_bpe(tokens, n_merges, verbose=verbose)
+        result = _train_bpe(
+            tokens, n_merges, verbose=verbose, show_progress=show_progress
+        )
 
         if result.n_merges_completed < n_merges:
             log.warning(
@@ -87,7 +91,7 @@ class RegexTokenizer(Tokenizer):
         self._tokenizer = None
 
     @override
-    def encode(
+    def _encode_impl(
         self,
         text: str,
         strategy: SpecialTokenStrategy | None = None,
@@ -100,14 +104,8 @@ class RegexTokenizer(Tokenizer):
         are encoded with BPE.
 
         :param strategy: Strategy to select allowed special tokens.
-        :raises TrainingError: If the tokenizer has not been trained yet.
         :raises TokenizationError: If encoding fails.
         """
-        if not self.merges:
-            raise TrainingError(
-                f"{self.__class__.__name__} must be trained before encoding"
-            )
-
         tokenizer = self._get_rust_tokenizer(pattern=self.pat)
 
         if strategy is None:
@@ -126,10 +124,11 @@ class RegexTokenizer(Tokenizer):
             raise TokenizationError("failed to encode text") from e
 
     @override
-    def encode_batch(
+    def _encode_batch_impl(
         self,
         texts: list[str],
         strategy: "SpecialTokenStrategy | None" = None,
+        show_progress: bool = True,
     ) -> list[list[Token]]:
         """
         Encode many texts in parallel via Rust/Rayon.
@@ -138,19 +137,11 @@ class RegexTokenizer(Tokenizer):
         :raises TrainingError: If the tokenizer has not been trained yet.
         :raises TokenizationError: If encoding fails.
         """
-        if not self.merges:
-            raise TrainingError(
-                f"{self.__class__.__name__} must be trained before encoding"
-            )
-
-        if not texts:
-            return []
-
         tokenizer = self._get_rust_tokenizer(pattern=self.pat)
 
         if strategy is None:
             try:
-                return tokenizer.encode_texts(texts)
+                return tokenizer.encode_texts(texts, show_progress=show_progress)
             except ValueError as e:
                 raise TokenizationError("failed to encode texts") from e
 
@@ -164,7 +155,11 @@ class RegexTokenizer(Tokenizer):
 
         try:
             if not allowed_special:
-                return tokenizer.encode_texts(texts)
-            return tokenizer.encode_texts_with_special(texts, allowed_special)
+                return tokenizer.encode_texts(texts, show_progress=show_progress)
+            return tokenizer.encode_texts_with_special(
+                texts,
+                allowed_special,
+                show_progress=show_progress,
+            )
         except ValueError as e:
             raise TokenizationError("failed to encode texts") from e

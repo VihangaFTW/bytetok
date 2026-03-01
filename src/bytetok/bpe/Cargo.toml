@@ -1,7 +1,12 @@
 [package]
 name = "bpe"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
+description = "Rust BPE tokenizer and trainer extension for ByteTok."
+license = "MIT"
+repository = "https://github.com/VihangaFTW/bytetok"
+homepage = "https://github.com/VihangaFTW/bytetok"
+documentation = "https://github.com/VihangaFTW/bytetok/wiki"
 
 [lib]
 name = "_bpe_rs"
@@ -11,3 +16,4 @@ crate-type = ["cdylib", "rlib"]
 fancy-regex = "0.17.0"
 pyo3 = { version = "0.28.0", features = ["extension-module", "abi3-py312"] }
 rayon = "1.11.0"
+indicatif = {version = "0.18.4", features = ["rayon"]}

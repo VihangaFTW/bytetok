@@ -1,7 +1,7 @@
 //! Core BPE training algorithm (Algorithm 2).
 //!
-//! Optimized implementation from "A Formal Perspective on Byte-Pair Encoding"
-//! https://aclanthology.org/2023.findings-acl.38.pdf
+//! Optimized implementation from
+//! ["A Formal Perspective on Byte-Pair Encoding"](https://aclanthology.org/2023.findings-acl.38.pdf).
 //!
 //! Time complexity: O(N log V) vs O(NV) for naive implementation.
 
@@ -21,10 +21,10 @@ use crate::types::{TextIdx, Token, TokenFreq, TokenPair};
 struct Node {
     /// The token identifier at this position.
     token: Token,
-    
+
     /// Index of the previous node in the sequence, if any.
     prev_idx: Option<TextIdx>,
-    
+
     /// Index of the next node in the sequence, if any.
     next_idx: Option<TextIdx>,
 }
@@ -37,7 +37,7 @@ struct Node {
 struct HeapItem {
     /// Frequency count of this token pair.
     freq: TokenFreq,
-    
+
     /// The token pair being tracked.
     pair: TokenPair,
 }
@@ -49,9 +49,8 @@ impl PartialOrd for HeapItem {
     }
 }
 
-/// Implement Ord for heap item: highest freq pair at top.
-/// Needed for heap to compare items.
 impl Ord for HeapItem {
+    /// Compares by frequency (highest first), breaking ties by pair values.
     fn cmp(&self, other: &Self) -> Ordering {
         // Compare by freq between two pairs.
         // Break tie by comparing pair values.
@@ -112,7 +111,8 @@ impl BPETrainer {
     /// * `tokens` - Initial sequence of tokens (e.g., bytes 0-255)
     /// * `next_tok` - Next available token ID (e.g., 256 for bytes)
     ///
-    /// # Example
+    /// # Examples
+    ///
     /// ```ignore
     /// let tokens = vec![0, 1, 0, 1, 2];
     /// let mut trainer = BPETrainer::new(tokens, 256);
@@ -151,15 +151,17 @@ impl BPETrainer {
         trainer
     }
 
-    /// Perform one merge operation.
-    /// Refer to algorithm 2: https://aclanthology.org/2023.findings-acl.38.pdf
+    /// Performs one merge operation.
     ///
-    /// Returns true if a merge was performed, false if no pairs remain.
+    /// Based on Algorithm 2 from
+    /// ["A Formal Perspective on Byte-Pair Encoding"](https://aclanthology.org/2023.findings-acl.38.pdf).
+    ///
+    /// Returns `true` if a merge was performed, `false` if no pairs remain.
     ///
     /// # Time Complexity
-    /// Worst case: `O(N*log V)` where `N` is the token sequence length and `V` refers to vocab size.
     ///
-    /// For reference, a naive BPE implementation has worst case `O(N*V)`.
+    /// Worst case: `O(N log V)` where `N` is the token sequence length and `V` is the
+    /// vocabulary size. For reference, a naive implementation has worst case `O(N × V)`.
     pub(crate) fn merge_step(&mut self) -> bool {
         // Get the most frequent pair.
         let (merge_pair, _merge_freq) = match self.get_max_pair() {
@@ -221,20 +223,57 @@ impl BPETrainer {
 
     /// Trains the BPE model by performing the specified number of merges.
     ///
-    /// Repeatedly calls `merge_step` up to `num_merges` times. Stops early
-    /// if no more pairs can be merged.
+    /// Repeatedly calls [`merge_step()`](Self::merge_step) up to `num_merges` times.
+    /// Stops early if no more pairs can be merged.
     ///
     /// # Arguments
     ///
     /// * `num_merges` - Maximum number of merge operations to perform.
-    pub(crate) fn train(&mut self, num_merges: usize) {
+    /// * `show_progress` - Whether to display a progress bar during training.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`TemplateError`](indicatif::style::TemplateError) if the progress bar
+    /// style template fails to compile.
+    pub(crate) fn train(
+        &mut self,
+        num_merges: usize,
+        show_progress: bool,
+    ) -> Result<(), indicatif::style::TemplateError> {
+        use indicatif::{ProgressBar, ProgressStyle};
+
+        // create progress bar
+        let progress = if show_progress {
+            let pb = ProgressBar::new(num_merges as u64);
+            let style = ProgressStyle::default_bar()
+                .template("[{elapsed_precise}] {msg:<30!} {wide_bar} {pos}/{len}")?;
+
+            pb.set_style(style);
+            pb.set_message("Training BPE merges");
+            pb.enable_steady_tick(std::time::Duration::from_secs(1));
+            Some(pb)
+        } else {
+            None
+        };
+
         for _i in 0..num_merges {
             if !self.merge_step() {
                 #[cfg(debug_assertions)]
                 println!("No more pairs to merge after {} merges", _i);
                 break;
             }
+            // advance progress bar after each merge step
+            if let Some(pb) = &progress {
+                pb.inc(1);
+            }
         }
+
+        // clean up indicatif resources
+        if let Some(pb) =  &progress {
+            pb.finish_and_clear();
+        }
+
+        Ok(())
     }
 
     /// Returns the current token sequence as a vector.
@@ -554,7 +593,7 @@ mod tests {
     fn test_basic_merge() {
         let tokens = [0, 1, 0, 0, 1, 1, 0, 0];
         let mut trainer = BPETrainer::new(&tokens, 2);
-        trainer.train(3);
+        trainer.train(3, false).expect("progress bar template should be parseable");
         let final_tokens = trainer.encodings();
         // Should have fewer tokens than we started with.
         assert!(final_tokens.len() < 8);

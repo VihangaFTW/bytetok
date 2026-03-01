@@ -26,18 +26,29 @@ class BPETrainingResult:
 
 
 def _train_bpe(
-    tokens: list[Token], n_merges: int, verbose: bool = False
+    tokens: list[Token],
+    n_merges: int,
+    verbose: bool = False,
+    show_progress: bool = True,
 ) -> BPETrainingResult:
     """
-    Train BPE on a sequence of tokens via the Rust implementation.
+    Train a BPE model from a token sequence using the Rust trainer.
 
-    :param verbose: Log each merge operation when ``True``.
+    :param tokens: Input token sequence used for training.
+    :param n_merges: Maximum number of merge operations to perform.
+    :param verbose: Log each learned merge when ``True``.
+    :param show_progress: Display a Rust-side progress bar during training when ``True``.
+    :returns: Training output containing vocab, merge rules, and completed merge count.
+    :raises TrainingError: If ``tokens`` is empty or if the Rust trainer fails.
     """
     if len(tokens) == 0:
         raise TrainingError("empty token sequence, no training performed")
 
     trainer = RustBPETrainer(tokens, 256)
-    trainer.train(n_merges)
+    try:
+        trainer.train(n_merges, show_progress=show_progress)
+    except ValueError as e:
+        raise TrainingError("internal error") from e
 
     merge_history = trainer.get_merge_history()
 
