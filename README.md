@@ -169,6 +169,8 @@ encoded = tokenizer.encode_batch(
 
 ByteTok automatically checks for conflicts when special tokens would replace existing tokens in the vocabulary or if there are duplicates.
 
+For a complete list of special token strategies, see the [Wiki documentation](https://github.com/VihangaFTW/bytetok/wiki/ByteTok-Documentation#special-token-strategies).
+
 ## Acknowledgment
 
 ByteTok is inspired by Andrej Kaparthy's [minbpe](https://github.com/karpathy/minbpe). A walkthrough of _minbpe_ repository is documented on his Youtube channel [here](https://youtu.be/zduSFxRajkE).
