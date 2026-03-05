@@ -13,10 +13,10 @@ pub(crate) type Token = usize;
 /// Used to index into the doubly-linked list structure during training.
 pub(crate) type TextIdx = usize;
 
-/// Frequency count for token pairs during training.
+/// Frequency count for token pairs or sequence during training.
 ///
-/// Tracks how many times a token pair appears in the current sequence.
-pub(crate) type TokenFreq = usize;
+/// Tracks how many times a token pair or sequence appears in the current corpus.
+pub(crate) type Count = usize;
 
 /// Merge order indicates when a merge rule was learned during training.
 ///
@@ -33,5 +33,4 @@ pub(crate) type ByteSeq = Vec<u8>;
 /// Used as a key for looking up merge rules during encoding and for
 /// tracking pair frequencies during training.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct TokenPair(pub(crate) Token, pub(crate) Token);
-
+pub(crate) struct Pair(pub(crate) Token, pub(crate) Token);

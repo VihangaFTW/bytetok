@@ -17,3 +17,4 @@ fancy-regex = "0.17.0"
 pyo3 = { version = "0.28.0", features = ["extension-module", "abi3-py312"] }
 rayon = "1.11.0"
 indicatif = {version = "0.18.4", features = ["rayon"]}
+hashbrown = "0.16.1"

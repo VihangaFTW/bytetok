@@ -139,7 +139,10 @@ impl BPETokenizer {
             pb.finish_and_clear();
             result
         } else {
-            texts.par_iter().map(|text| self.encode_text(text)).collect()
+            texts
+                .par_iter()
+                .map(|text| self.encode_text(text))
+                .collect()
         }
     }
 
@@ -205,7 +208,10 @@ impl BPETokenizer {
             pb.finish_and_clear();
             Ok(result)
         } else {
-            Ok(texts.par_iter().map(|text| self.encode_bytes(text)).collect())
+            Ok(texts
+                .par_iter()
+                .map(|text| self.encode_bytes(text))
+                .collect())
         }
     }
     /// Encode a single text string with special token handling.
@@ -310,7 +316,9 @@ impl BPETokenizer {
         // encode every normal segment in one parallel Rayon batch.
         // collect() on a ParallelIterator preserves input order.
         let encoded_normals: Vec<Vec<Token>> = if show_progress {
-            let pb = match self.progress_bar(flattened_normal_segs.len() as u64, "Encoding texts (st)") {
+            let pb = match self
+                .progress_bar(flattened_normal_segs.len() as u64, "Encoding texts (st)")
+            {
                 Ok(pb) => pb,
                 Err(te) => return Err(EncodeError::ProgressBarSetup(te)),
             };
@@ -597,7 +605,9 @@ mod tests {
     fn test_encode_texts_parallel() {
         let tok = make_tokenizer(vec![((97, 98), 256)], r"\S+");
         let texts = &["ab", "cd", "ab"];
-        let results = tok.encode_texts(texts, false).expect("texts should be batch-encodable");
+        let results = tok
+            .encode_texts(texts, false)
+            .expect("texts should be batch-encodable");
         assert_eq!(results, vec![vec![256], vec![99, 100], vec![256]]);
     }
 
@@ -638,7 +648,9 @@ mod tests {
     fn test_lookahead_pattern() {
         // Pattern with negative lookahead.
         let tok = make_tokenizer(vec![], r"\s+(?!\S)|\S+|\s+");
-        let result = tok.encode_text("hello world").expect("text should be encodable");
+        let result = tok
+            .encode_text("hello world")
+            .expect("text should be encodable");
         // "hello" → [104,101,108,108,111], " " → [32], "world" → [119,111,114,108,100]
         assert_eq!(
             result,

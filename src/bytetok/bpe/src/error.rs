@@ -75,7 +75,7 @@ impl fmt::Display for EncodeError {
 #[derive(Debug)]
 pub(crate) enum SpecialTokenError {
     /// Token Id already exists in vocabulary.
-    IllegalToken(Token)
+    IllegalToken(Token),
 }
 
 impl fmt::Display for SpecialTokenError {
@@ -85,7 +85,6 @@ impl fmt::Display for SpecialTokenError {
         }
     }
 }
-
 
 /// Errors that can occur when initializing a tokenizer.
 #[derive(Debug)]
@@ -107,5 +106,3 @@ impl From<SpecialTokenError> for TokenizerInitError {
         Self::InvalidSpecialToken(e)
     }
 }
-
-

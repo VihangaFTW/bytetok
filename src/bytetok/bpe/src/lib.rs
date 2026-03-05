@@ -13,6 +13,7 @@ mod converter;
 mod error;
 mod tokenizer;
 mod trainer;
+mod trainer_weighted;
 mod types;
 
 use crate::error::{DecodeError, EncodeError, TokenizerInitError};
@@ -123,7 +124,12 @@ impl RustBPETokenizer {
     /// :returns: List of encoded token sequences in input order.
     /// :raises ValueError: If the regex engine fails during text splitting.
     #[pyo3(signature = (texts, show_progress = true))]
-    fn encode_texts(&self, py: Python<'_>, texts: Vec<String>, show_progress: bool) -> PyResult<Vec<Vec<usize>>> {
+    fn encode_texts(
+        &self,
+        py: Python<'_>,
+        texts: Vec<String>,
+        show_progress: bool,
+    ) -> PyResult<Vec<Vec<usize>>> {
         let tokenizer = &self.tokenizer;
         py.detach(move || {
             let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
@@ -201,12 +207,18 @@ impl RustBPETokenizer {
     /// :param show_progress: Whether to display a progress bar during batch encoding.
     /// :returns: List of encoded token sequences in input order.
     #[pyo3(signature = (texts, show_progress = true))]
-    fn encode_bytes_batch(&self, py: Python<'_>, texts: Vec<String>, show_progress: bool) -> PyResult<Vec<Vec<usize>>>{
+    fn encode_bytes_batch(
+        &self,
+        py: Python<'_>,
+        texts: Vec<String>,
+        show_progress: bool,
+    ) -> PyResult<Vec<Vec<usize>>> {
         let tokenizer = &self.tokenizer;
         py.detach(move || {
             let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
             tokenizer.encode_bytes_batch(&text_refs, show_progress)
-        }).map_err(encode_err_to_pyerr)
+        })
+        .map_err(encode_err_to_pyerr)
     }
 
     /// Decode a token sequence back into a UTF-8 string.
@@ -319,7 +331,9 @@ impl RustBPETrainer {
         let trainer = &mut self.trainer;
         // allow rust code to run without the GIL
         py.detach(move || {
-            trainer.train(num_merges, show_progress).map_err(|e| PyErr::new::<PyValueError, _>(e.to_string()))
+            trainer
+                .train(num_merges, show_progress)
+                .map_err(|e| PyErr::new::<PyValueError, _>(e.to_string()))
         })
     }
 

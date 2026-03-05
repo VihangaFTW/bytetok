@@ -11,7 +11,7 @@ use std::{
     ops::ControlFlow,
 };
 
-use crate::types::{TextIdx, Token, TokenFreq, TokenPair};
+use crate::types::{Count, Pair, TextIdx, Token};
 
 /// Node in doubly-linked list representing a token in the training sequence.
 ///
@@ -36,10 +36,10 @@ struct Node {
 #[derive(Debug, PartialEq, Eq)]
 struct HeapItem {
     /// Frequency count of this token pair.
-    freq: TokenFreq,
+    freq: Count,
 
     /// The token pair being tracked.
-    pair: TokenPair,
+    pair: Pair,
 }
 
 impl PartialOrd for HeapItem {
@@ -90,12 +90,12 @@ pub(crate) struct BPETrainer {
     /// pair -> set of positions [index of first token of every pair].
     ///
     /// Source of truth for pair positions.
-    pair_positions: HashMap<TokenPair, HashSet<usize>>,
+    pair_positions: HashMap<Pair, HashSet<usize>>,
 
     /// Current frequencies of each pair.
     ///
     /// Source of truth for pair frequencies.
-    pair_freqs: HashMap<TokenPair, usize>,
+    pair_freqs: HashMap<Pair, usize>,
 
     /// Next available merge token ID.
     next_tok: Token,
@@ -269,7 +269,7 @@ impl BPETrainer {
         }
 
         // clean up indicatif resources
-        if let Some(pb) =  &progress {
+        if let Some(pb) = &progress {
             pb.finish_and_clear();
         }
 
@@ -330,7 +330,7 @@ impl BPETrainer {
                 if let Some(next_idx) = node.next_idx
                     && let Some(next_node) = &self.nodes[next_idx]
                 {
-                    let pair = TokenPair(node.token, next_node.token);
+                    let pair = Pair(node.token, next_node.token);
                     // Increment pair frequency.
                     *self.pair_freqs.entry(pair).or_insert(0) += 1;
                     // Record pair position.
@@ -357,7 +357,7 @@ impl BPETrainer {
     /// # Returns
     ///
     /// `Some((pair, frequency))` if a valid pair exists, `None` if no pairs remain.
-    fn get_max_pair(&mut self) -> Option<(TokenPair, TokenFreq)> {
+    fn get_max_pair(&mut self) -> Option<(Pair, Count)> {
         // After merges, some entries in the heap will have stale counts.
         // So we need to keep popping from the heap until we find
         // a pair that exists in current token sequence and validate its count.
@@ -386,7 +386,7 @@ impl BPETrainer {
     /// # Note
     ///
     /// This only updates tracking structures; the actual linked list nodes are not modified.
-    fn remove_pair_at(&mut self, idx: TextIdx, pair: TokenPair) {
+    fn remove_pair_at(&mut self, idx: TextIdx, pair: Pair) {
         // Decrement count.
         if let Some(freq) = self.pair_freqs.get_mut(&pair)
             && *freq > 0
@@ -413,7 +413,7 @@ impl BPETrainer {
     /// # Note
     ///
     /// This only updates tracking structures; the actual linked list nodes are not modified.
-    fn add_pair_at(&mut self, idx: usize, pair: TokenPair) {
+    fn add_pair_at(&mut self, idx: usize, pair: Pair) {
         // Add position.
         self.pair_positions.entry(pair).or_default().insert(idx);
         // Increment freq.
@@ -446,7 +446,7 @@ impl BPETrainer {
         if let Some(prev_idx) = cur_prev_idx
             && let Some(prev_node) = &self.nodes[prev_idx]
         {
-            let new_pair = TokenPair(prev_node.token, new_tok_id);
+            let new_pair = Pair(prev_node.token, new_tok_id);
             self.add_pair_at(prev_idx, new_pair);
         }
 
@@ -454,7 +454,7 @@ impl BPETrainer {
         if let Some(next_idx) = new_next_idx
             && let Some(next_node) = &self.nodes[next_idx]
         {
-            let new_pair = TokenPair(new_tok_id, next_node.token);
+            let new_pair = Pair(new_tok_id, next_node.token);
             self.add_pair_at(idx1, new_pair);
         }
     }
@@ -504,13 +504,13 @@ impl BPETrainer {
     /// * `merge_pair` - The pair being merged.
     /// * `idx1` - Index of the first token in the merge pair.
     /// * `idx2` - Index of the second token in the merge pair.
-    fn remove_neighbours(&mut self, merge_pair: TokenPair, idx1: TextIdx, idx2: TextIdx) {
+    fn remove_neighbours(&mut self, merge_pair: Pair, idx1: TextIdx, idx2: TextIdx) {
         // Remove old left neighbour if it exists.
         if let Some(prev_idx) = self.nodes[idx1].as_ref().and_then(|n| n.prev_idx)
             // Check if prev node (token) exists.
             && let Some(prev_node) = &self.nodes[prev_idx]
         {
-            let old_pair = TokenPair(prev_node.token, merge_pair.0);
+            let old_pair = Pair(prev_node.token, merge_pair.0);
             self.remove_pair_at(prev_idx, old_pair);
         }
 
@@ -518,7 +518,7 @@ impl BPETrainer {
         if let Some(next_idx) = self.nodes[idx2].as_ref().and_then(|n| n.next_idx)
             && let Some(next_node) = &self.nodes[next_idx]
         {
-            let old_pair = TokenPair(merge_pair.1, next_node.token);
+            let old_pair = Pair(merge_pair.1, next_node.token);
             self.remove_pair_at(idx2, old_pair);
         }
     }
@@ -536,11 +536,7 @@ impl BPETrainer {
     /// # Returns
     ///
     /// `Continue((idx1, idx2))` with the node indices if valid, or `Break(())` if invalid.
-    fn get_merge_idxs(
-        &mut self,
-        pair: TokenPair,
-        pos: TextIdx,
-    ) -> ControlFlow<(), (TextIdx, TextIdx)> {
+    fn get_merge_idxs(&mut self, pair: Pair, pos: TextIdx) -> ControlFlow<(), (TextIdx, TextIdx)> {
         let idx1 = pos;
         // Retrieve pair's remaining token index.
         let idx2 = match &self.nodes[idx1] {
@@ -593,7 +589,9 @@ mod tests {
     fn test_basic_merge() {
         let tokens = [0, 1, 0, 0, 1, 1, 0, 0];
         let mut trainer = BPETrainer::new(&tokens, 2);
-        trainer.train(3, false).expect("progress bar template should be parseable");
+        trainer
+            .train(3, false)
+            .expect("progress bar template should be parseable");
         let final_tokens = trainer.encodings();
         // Should have fewer tokens than we started with.
         assert!(final_tokens.len() < 8);

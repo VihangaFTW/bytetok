@@ -14,7 +14,7 @@ use std::{
 
 use crate::{
     error::{DecodeError, SpecialTokenError},
-    types::{ByteSeq, MergeOrder, Token, TokenPair},
+    types::{ByteSeq, MergeOrder, Pair, Token},
 };
 
 /// Item in the priority queue for merge ordering.
@@ -29,7 +29,7 @@ struct MergeCandidate {
     merge_order: MergeOrder,
 
     /// The token pair to be merged.
-    pair: TokenPair,
+    pair: Pair,
 
     /// Position in the token sequence where this pair starts.
     ///
@@ -80,7 +80,7 @@ pub(crate) struct BPEConverter {
     ///
     /// The merge_order indicates when this merge was learned during training,
     /// with lower values representing earlier merges.
-    merges: HashMap<TokenPair, (Token, MergeOrder)>,
+    merges: HashMap<Pair, (Token, MergeOrder)>,
 
     /// Maps token IDs to their byte sequences.
     ///
@@ -135,7 +135,7 @@ impl BPEConverter {
         }
 
         for (merge_order, (pair, tok)) in merge_history.into_iter().enumerate() {
-            merges.insert(TokenPair(pair.0, pair.1), (tok, merge_order));
+            merges.insert(Pair(pair.0, pair.1), (tok, merge_order));
 
             // build vocabulary entry for merged token by concatenating constituent byte sequences
             // ensure vector can be safely indexed at position tok without panicking; O(1) time
@@ -239,7 +239,7 @@ impl BPEConverter {
             };
 
             // validate live pair
-            if candidate.pair != TokenPair(left, right) {
+            if candidate.pair != Pair(left, right) {
                 continue;
             }
 
@@ -315,9 +315,9 @@ impl BPEConverter {
         };
 
         let pair = if check_left {
-            TokenPair(tok, merged_tok)
+            Pair(tok, merged_tok)
         } else {
-            TokenPair(merged_tok, tok)
+            Pair(merged_tok, tok)
         };
 
         // push new pair as candidate if merge rule exists
@@ -343,7 +343,7 @@ impl BPEConverter {
     /// * `heap` - The priority queue to populate.
     fn initialize_minheap(&self, tokens: &[Token], heap: &mut BinaryHeap<MergeCandidate>) {
         for i in 0..tokens.len().saturating_sub(1) {
-            let pair = TokenPair(tokens[i], tokens[i + 1]);
+            let pair = Pair(tokens[i], tokens[i + 1]);
             if let Some(&(_, merge_order)) = self.merges.get(&pair) {
                 let entry = MergeCandidate {
                     pair,
@@ -421,8 +421,8 @@ mod tests {
     fn test_basic_encoding() {
         let history = vec![((0, 1), 2), ((2, 0), 3)];
 
-        let converter =
-            BPEConverter::new(history, &empty_special()).expect("converter should be constructable from valid merge history");
+        let converter = BPEConverter::new(history, &empty_special())
+            .expect("converter should be constructable from valid merge history");
 
         // Basic two-step merge.
         let tokens = vec![0, 1, 0];
@@ -434,7 +434,8 @@ mod tests {
     #[test]
     fn test_single_token_no_change() {
         let history = vec![((0, 1), 2)];
-        let converter = BPEConverter::new(history, &empty_special()).expect("converter should be constructable from valid merge history");
+        let converter = BPEConverter::new(history, &empty_special())
+            .expect("converter should be constructable from valid merge history");
 
         let tokens = vec![7];
         let encoded = converter.encode(tokens);
@@ -445,7 +446,8 @@ mod tests {
     #[test]
     fn test_no_merge_rules_apply() {
         let history = vec![((5, 6), 7)];
-        let converter = BPEConverter::new(history, &empty_special()).expect("converter should be constructable from valid merge history");
+        let converter = BPEConverter::new(history, &empty_special())
+            .expect("converter should be constructable from valid merge history");
 
         let tokens = vec![0, 1, 2, 3];
         let encoded = converter.encode(tokens);
@@ -456,7 +458,8 @@ mod tests {
     #[test]
     fn test_merge_skips_consumed_right() {
         let history = vec![((0, 1), 2), ((2, 0), 3)];
-        let converter = BPEConverter::new(history, &empty_special()).expect("converter should be constructable from valid merge history");
+        let converter = BPEConverter::new(history, &empty_special())
+            .expect("converter should be constructable from valid merge history");
 
         let tokens = vec![0, 1, 0, 9];
         let encoded = converter.encode(tokens);
@@ -467,7 +470,8 @@ mod tests {
     #[test]
     fn test_merge_skips_consumed_left() {
         let history = vec![((0, 1), 4), ((2, 3), 5), ((4, 5), 6)];
-        let converter = BPEConverter::new(history, &empty_special()).expect("converter should be constructable from valid merge history");
+        let converter = BPEConverter::new(history, &empty_special())
+            .expect("converter should be constructable from valid merge history");
 
         let tokens = vec![0, 1, 2, 3];
         let encoded = converter.encode(tokens);
@@ -478,7 +482,8 @@ mod tests {
     #[test]
     fn test_tie_break_by_position() {
         let history = vec![((0, 1), 2), ((2, 1), 3)];
-        let converter = BPEConverter::new(history, &empty_special()).expect("converter should be constructable from valid merge history");
+        let converter = BPEConverter::new(history, &empty_special())
+            .expect("converter should be constructable from valid merge history");
 
         let tokens = vec![0, 1, 1];
         let encoded = converter.encode(tokens);
@@ -489,7 +494,8 @@ mod tests {
     #[test]
     fn test_multiple_disjoint_merges() {
         let history = vec![((0, 0), 2), ((1, 1), 3)];
-        let converter = BPEConverter::new(history, &empty_special()).expect("converter should be constructable from valid merge history");
+        let converter = BPEConverter::new(history, &empty_special())
+            .expect("converter should be constructable from valid merge history");
 
         let tokens = vec![0, 0, 1, 1];
         let encoded = converter.encode(tokens);
@@ -500,37 +506,47 @@ mod tests {
     #[test]
     fn test_decode_base_tokens() {
         let history = vec![];
-        let converter = BPEConverter::new(history, &empty_special()).expect("converter should be constructable from valid merge history");
+        let converter = BPEConverter::new(history, &empty_special())
+            .expect("converter should be constructable from valid merge history");
 
         // Decode "abc" (UTF-8 bytes: [97, 98, 99]).
-        let decoded = converter.decode(&[97, 98, 99]).expect("tokens should decode to bytes");
+        let decoded = converter
+            .decode(&[97, 98, 99])
+            .expect("tokens should decode to bytes");
         assert_eq!(decoded, vec![97, 98, 99]);
     }
 
     #[test]
     fn test_decode_merged_tokens() {
         let history = vec![((97, 98), 256)];
-        let converter = BPEConverter::new(history, &empty_special()).expect("converter should be constructable from valid merge history");
+        let converter = BPEConverter::new(history, &empty_special())
+            .expect("converter should be constructable from valid merge history");
 
         // Token 256 should decode to [97, 98].
-        let decoded = converter.decode(&[256, 99]).expect("tokens should decode to bytes");
+        let decoded = converter
+            .decode(&[256, 99])
+            .expect("tokens should decode to bytes");
         assert_eq!(decoded, vec![97, 98, 99]);
     }
 
     #[test]
     fn test_decode_nested_merges() {
         let history = vec![((97, 98), 256), ((256, 99), 257)];
-        let converter = BPEConverter::new(history, &empty_special()).expect("converter should be constructable from valid merge history");
+        let converter = BPEConverter::new(history, &empty_special())
+            .expect("converter should be constructable from valid merge history");
 
         // Token 257 should decode to [97, 98, 99].
-        let decoded = converter.decode(&[257]).expect("tokens should decode to bytes");
+        let decoded = converter
+            .decode(&[257])
+            .expect("tokens should decode to bytes");
         assert_eq!(decoded, vec![97, 98, 99]);
     }
 
     #[test]
     fn test_decode_invalid_token() {
         let history = vec![((97, 98), 256)];
-        let converter = BPEConverter::new(history, &empty_special()).expect("converter should be constructable from valid merge history");
+        let converter = BPEConverter::new(history, &empty_special())
+            .expect("converter should be constructable from valid merge history");
 
         // Token 999 doesn't exist - should return an error.
         let result = converter.decode(&[97, 999]);
@@ -539,22 +555,24 @@ mod tests {
 
     #[test]
     fn test_decode_special_token() {
-        let special =
-            HashMap::from([("<|eot|>".to_string(), 1000 as Token)]);
-        let converter =
-            BPEConverter::new(vec![], &special).expect("converter should be constructable from valid merge history");
-        let decoded = converter.decode(&[1000]).expect("tokens should decode to bytes");
+        let special = HashMap::from([("<|eot|>".to_string(), 1000 as Token)]);
+        let converter = BPEConverter::new(vec![], &special)
+            .expect("converter should be constructable from valid merge history");
+        let decoded = converter
+            .decode(&[1000])
+            .expect("tokens should decode to bytes");
         assert_eq!(decoded, b"<|eot|>".to_vec());
     }
 
     #[test]
     fn test_decode_special_token_mixed_with_vocab() {
         let history = vec![((97, 98), 256)];
-        let special =
-            HashMap::from([("<|eot|>".to_string(), 1000 as Token)]);
-        let converter =
-            BPEConverter::new(history, &special).expect("converter should be constructable from valid merge history");
-        let decoded = converter.decode(&[256, 1000, 99]).expect("tokens should decode to bytes");
+        let special = HashMap::from([("<|eot|>".to_string(), 1000 as Token)]);
+        let converter = BPEConverter::new(history, &special)
+            .expect("converter should be constructable from valid merge history");
+        let decoded = converter
+            .decode(&[256, 1000, 99])
+            .expect("tokens should decode to bytes");
         assert_eq!(decoded, b"ab<|eot|>c".to_vec());
     }
 
@@ -576,7 +594,8 @@ mod tests {
     #[test]
     fn test_vocab_size() {
         let history = vec![((97, 98), 256), ((256, 99), 257)];
-        let converter = BPEConverter::new(history, &empty_special()).expect("converter should be constructable from valid merge history");
+        let converter = BPEConverter::new(history, &empty_special())
+            .expect("converter should be constructable from valid merge history");
 
         // Should have at least 258 entries (0-255 base + 256, 257).
         assert!(converter.vocab().len() >= 258);
