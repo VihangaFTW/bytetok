@@ -66,12 +66,15 @@ class RegexTokenizer(Tokenizer):
         # handle list input and convert text to bytes
         if isinstance(text, list):
             text = "".join(text)
-        # split text into chunks defined by pattern
-        chunks = [m.group(0) for m in re.finditer(self.pat, text)]
-        # convert each chunk to byte sequence and flatten into single sequence
-        tokens: list[int] = []
-        for chunk in chunks:
-            tokens.extend(list(chunk.encode("utf-8", errors="replace")))
+
+        # accumulate byte stream in place
+        buf = bytearray()
+
+        # find subword matches, convert to bytes and extend stream
+        for m in re.finditer(self.pat, text):
+            buf.extend(m.group(0).encode("utf-8", errors="replace"))
+        
+        tokens = list(buf)
 
         n_merges = vocab_size - 256
 
