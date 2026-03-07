@@ -11,7 +11,7 @@ use std::{
     ops::ControlFlow,
 };
 
-use crate::types::{Count, Pair, TextIdx, Token};
+use crate::types::{Count, Pair, Token};
 
 /// Node in doubly-linked list representing a token in the training sequence.
 ///

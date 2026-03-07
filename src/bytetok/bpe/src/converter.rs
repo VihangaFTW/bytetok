@@ -14,7 +14,7 @@ use std::{
 
 use crate::{
     error::{DecodeError, SpecialTokenError},
-    types::{ByteSeq, MergeOrder, Pair, Token},
+    types::{ByteVec, MergeOrder, Pair, Token},
 };
 
 /// Item in the priority queue for merge ordering.
@@ -86,11 +86,11 @@ pub(crate) struct BPEConverter {
     ///
     /// - vocab[0..256]: Base vocabulary (single bytes)
     /// - vocab[256..]: Merged tokens (concatenated byte sequences)
-    vocab: Vec<ByteSeq>,
+    vocab: Vec<ByteVec>,
     /// Maps special token IDs to their corresponding byte sequences.
     ///
     /// Used during decoding to reconstruct the original byte representation of special tokens.
-    inverted_special_tokens: HashMap<Token, ByteSeq>,
+    inverted_special_tokens: HashMap<Token, ByteVec>,
 }
 
 impl BPEConverter {
@@ -127,7 +127,7 @@ impl BPEConverter {
         special_tokens: &HashMap<String, Token>,
     ) -> Result<Self, SpecialTokenError> {
         let mut merges = HashMap::new();
-        let mut vocab: Vec<ByteSeq> = Vec::new();
+        let mut vocab: Vec<ByteVec> = Vec::new();
 
         // initialize base vocabulary (0-255 → single bytes).
         for i in 0..256 {
@@ -157,7 +157,7 @@ impl BPEConverter {
         }
 
         // track inverted mapping for decoding
-        let mut inverted_special_tokens: HashMap<Token, ByteSeq> = HashMap::new();
+        let mut inverted_special_tokens: HashMap<Token, ByteVec> = HashMap::new();
 
         for (s, tok) in special_tokens.iter() {
             // ensure no special token overwrites an existing token
@@ -360,7 +360,7 @@ impl BPEConverter {
     /// # Returns
     ///
     /// Reference to the vocabulary mapping token IDs to byte sequences.
-    pub(crate) fn vocab(&self) -> &[ByteSeq] {
+    pub(crate) fn vocab(&self) -> &[ByteVec] {
         &self.vocab
     }
 
@@ -390,7 +390,7 @@ impl BPEConverter {
     /// let bytes = converter.decode(&[256, 99]).unwrap();
     /// assert_eq!(bytes, vec![97, 98, 99]); // "abc"
     /// ```
-    pub(crate) fn decode(&self, tokens: &[Token]) -> Result<ByteSeq, DecodeError> {
+    pub(crate) fn decode(&self, tokens: &[Token]) -> Result<ByteVec, DecodeError> {
         let mut result = Vec::new();
         for &token in tokens {
             if let Some(bytes) = self.vocab.get(token) {
