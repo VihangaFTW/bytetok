@@ -188,3 +188,12 @@ def test_rust_trainer_from_corpus_rejects_invalid_pattern():
     """Corpus constructor raises on invalid regex patterns."""
     with pytest.raises(ValueError, match="invalid regex pattern"):
         RustBPETrainer.from_corpus("hello world", pattern="(")
+
+
+def test_regex_training_allows_single_occurrence_merge():
+    """Regex training keeps the default single-occurrence merge threshold."""
+    tok = btok.get_tokenizer("gpt4o")
+
+    tok.train("ab", vocab_size=257, verbose=False, show_progress=False)
+
+    assert tok.vocab_size() == 257

@@ -445,20 +445,20 @@ impl RustBPETrainer {
     fn get_merges_and_vocab(&self, py: Python<'_>) -> PyResult<(Py<PyDict>, Py<PyDict>)> {
         let merge_history = self.get_merge_history();
 
-        // for transfering rust hashmap contents to python dicts
+        // transfer Rust `HashMap` contents into Python dictionaries
         let merges = PyDict::new(py);
         let vocab = PyDict::new(py);
 
         let mut vocab_rs: HashMap<Token, Vec<u8>> =
             HashMap::with_capacity(256 + merge_history.len());
 
-        // build base vocab
+        // build the base vocabulary
         for tok in 0u32..256 {
             vocab_rs.insert(tok, vec![tok as u8]);
         }
 
         for ((left, right), merged) in merge_history {
-            // construct new merged bytes vector
+            // construct the merged byte sequence for this learned token
             let left_bytes = vocab_rs.get(&left).ok_or_else(|| {
                 PyErr::new::<PyValueError, _>(format!("missing token {left} in vocabulary"))
             })?;
@@ -480,8 +480,8 @@ impl RustBPETrainer {
             vocab.set_item(tok, PyBytes::new(py, &bytes))?;
         }
 
-        // unbind() required by py03 when returning objects to python from rust
-        // sth to do with lifetimes
+        // `unbind()` converts the bound dictionaries into owned Python objects
+        // that lets py03 return them safely after this `Python` context ends
         Ok((merges.unbind(), vocab.unbind()))
     }
 

@@ -86,7 +86,7 @@ class RegexTokenizer(Tokenizer):
 
         if result.n_merges_completed < n_merges:
             log.warning(
-                f"no more byte pairs to merge after {result.n_merges_completed} merges"
+                f"no more byte pairs to merge after {result.n_merges_completed} merges "
                 f"(requested {n_merges}) stopping early"
             )
 

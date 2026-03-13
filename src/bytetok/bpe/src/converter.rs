@@ -378,7 +378,7 @@ impl BPEConverter {
     ///
     /// # Returns
     ///
-    /// `Ok(ByteSeq)` containing the concatenated byte representation.
+    /// `Ok(ByteVec)` containing the concatenated byte representation.
     ///
     /// # Errors
     ///

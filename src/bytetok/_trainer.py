@@ -109,7 +109,7 @@ def _train_bpe_from_corpus(
     if len(corpus) == 0:
         raise TrainingError("empty corpus, no training performed")
 
-    trainer = RustBPETrainer.from_corpus(corpus, pattern, min_count=2)
+    trainer = RustBPETrainer.from_corpus(corpus, pattern, min_count=1)
     try:
         trainer.train(n_merges, show_progress=show_progress)
     except ValueError as e:
@@ -121,7 +121,7 @@ def _train_bpe_from_corpus(
     if verbose and merge_history:
         for i, (pair, new_tok) in enumerate(merge_history, start=1):
             log.info(
-                "merge %d/%d: %s -> %d",    
+                "merge %d/%d: %s -> %d",
                 i,
                 n_merges,
                 pair,

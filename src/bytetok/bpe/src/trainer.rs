@@ -20,7 +20,7 @@ use crate::{
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-// all heuristic; source: gpt 5.4
+// heuristic capacities chosen to reduce rehashing and heap rebuilds on large corpora
 const LOCAL_MAP_CAPACITY: usize = 8192;
 const PAIR_MAP_CAPACITY: usize = 4096;
 const CHUNK_BYTES: usize = 8 * 1024 * 1024;
@@ -431,7 +431,7 @@ impl BPETrainer {
     /// assert_eq!(piece.tokens, vec![256, 3]);
     /// ```
     fn merge_in_piece(piece: &mut Piece, best_pair: Pair, new_token: Token) -> Option<PairDelta> {
-        let tokens = &piece.tokens;
+        let tokens = piece.tokens.as_slice();
 
         if tokens.len() < 2 {
             return None;
@@ -444,61 +444,38 @@ impl BPETrainer {
         {
             return None;
         }
-        // stores updated counts of all pairs
-        // that have their counts affected
-        // this map is used to update live pairs in caller
+        // diff pair counts before and after the rewrite so adjacent merges stay correct
         let mut delta: PairDelta =
             FxHashMap::with_capacity_and_hasher(PAIR_MAP_CAPACITY, Default::default());
 
-        // updated token sequence of piece after merges
         let mut new_tokens: Vec<Token> = Vec::with_capacity(tokens.len());
-
-        // casted for the subtraction operation
-        // with hashmap elements
-        let piece_count = piece.count as i64;
 
         let mut i = 0usize;
 
         while i < tokens.len() {
-            // best pairs are merged; pair count
-            // decrements proportional to piece count
             if i + 1 < tokens.len() && tokens[i] == best_pair.0 && tokens[i + 1] == best_pair.1 {
-                *delta.entry(best_pair).or_insert(0) -= piece_count;
-
-                // decrement count for old left pair
-                if let Some(&prev_tok) = new_tokens.last() {
-                    let left_pair = Pair(prev_tok, tokens[i]);
-                    *delta.entry(left_pair).or_insert(0) -= piece_count;
-
-                    // create new pair with the merged token
-                    // count proportional to piece count
-                    let new_left_pair = Pair(prev_tok, new_token);
-                    *delta.entry(new_left_pair).or_insert(0) += piece_count;
-                }
-
-                // decrement count for old right pair
-                if let Some(&next_tok) = tokens.get(i + 2) {
-                    let right_pair = Pair(tokens[i], next_tok);
-                    *delta.entry(right_pair).or_insert(0) -= piece_count;
-
-                    // add new right pair with merged token
-                    // again, its count proportional to piece count
-                    let new_right_pair = Pair(new_token, next_tok);
-                    *delta.entry(new_right_pair).or_insert(0) += piece_count;
-                }
-
-                // build new token sequence
                 new_tokens.push(new_token);
-                // i+1 token got merged
                 i += 2;
             } else {
-                // no match; advance pointer
                 new_tokens.push(tokens[i]);
                 i += 1;
             }
         }
+
+        let piece_count = piece.count as i64;
+        Self::accumulate_pair_delta(tokens, -piece_count, &mut delta);
+        Self::accumulate_pair_delta(&new_tokens, piece_count, &mut delta);
+
         piece.tokens = new_tokens;
         Some(delta)
+    }
+
+    /// Applies one signed pair-count contribution for every adjacent pair.
+    fn accumulate_pair_delta(tokens: &[Token], weight: i64, delta: &mut PairDelta) {
+        for window in tokens.windows(2) {
+            let pair = Pair(window[0], window[1]);
+            *delta.entry(pair).or_insert(0) += weight;
+        }
     }
 
     /// Pretokenizes the corpus into unique weighted pieces.
@@ -597,8 +574,8 @@ impl BPETrainer {
 
     /// Counts regex matches from one text chunk into a local frequency map.
     ///
-    /// Empty matches are skipped by advancing one byte to avoid infinite
-    /// loops.
+    /// Empty matches are skipped by advancing one Unicode scalar value to avoid
+    /// infinite loops without breaking UTF-8 boundaries.
     ///
     /// # Arguments
     ///
@@ -613,10 +590,11 @@ impl BPETrainer {
         while start <= text.len() {
             match re.find_from_pos(text, start) {
                 Ok(Some(m)) => {
-                    // handle empty string matches
                     if m.start() == m.end() {
-                        // advance pointer to prevent infinite loop
-                        start = m.end() + 1;
+                        start = match text[m.end()..].chars().next() {
+                            Some(ch) => m.end() + ch.len_utf8(),
+                            None => break,
+                        };
                         continue;
                     }
                     *map.entry(m.as_str().as_bytes()).or_insert(0) += 1;
@@ -900,5 +878,30 @@ mod tests {
         assert_eq!(trainer.num_pieces(), 2);
         trainer.train(5, false).expect("training should succeed");
         assert!(!trainer.merge_history().is_empty());
+    }
+
+    #[test]
+    fn test_merge_in_piece_diffs_adjacent_rewrites_correctly() {
+        let mut piece = Piece {
+            tokens: vec![1, 2, 1, 2],
+            count: 1,
+        };
+
+        let delta = BPETrainer::merge_in_piece(&mut piece, Pair(1, 2), 256)
+            .expect("piece should contain the target pair");
+
+        assert_eq!(piece.tokens, vec![256, 256]);
+        assert_eq!(delta.get(&Pair(1, 2)), Some(&-2));
+        assert_eq!(delta.get(&Pair(2, 1)), Some(&-1));
+        assert_eq!(delta.get(&Pair(256, 256)), Some(&1));
+    }
+
+    #[test]
+    fn test_pretok_empty_match_advances_on_char_boundary() {
+        let pieces = BPETrainer::pretokenize("éa", Some(r"(?=é)|."))
+            .expect("regex pretokenization should succeed");
+
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(pieces[0].tokens, vec![97]);
     }
 }
