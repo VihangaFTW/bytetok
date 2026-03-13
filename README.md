@@ -40,11 +40,11 @@ Dataset: [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci
 
 | Corpus Size | Vocab Size | Training Time | Encoding Throughput | Decoding Throughput | Compression Ratio | Size Reduction |
 | ----------- | ---------- | ------------- | ------------------- | ------------------- | ----------------- | -------------- |
-| 132.36 MB   | 10,000     | 38.5 secs     | 14.07 MB/sec        | 80.4M tokens/sec    | 3.32x             | 69.9%          |
-| 216.96 MB   | 25,000     | 1.17 mins     | 12.24 MB/sec        | 77.5M tokens/sec    | 3.52x             | 71.6%          |
-| 216.96 MB   | 50,000     | 1.57 mins     | 10.85 MB/sec        | 66.9M tokens/sec    | 3.68x             | 72.8%          |
-| 326.96 MB   | 50,000     | 2.39 mins     | 10.77 MB/sec        | 76.2M tokens/sec    | 3.72x             | 73.1%          |
-| 420.36 MB   | 100,000    | 4.92 mins     | 11.11 MB/sec        | 82.6M tokens/sec    | 3.84x             | 74.0%          |
+| 132.36 MB   | 10,000     | 32.4 secs     | 14.13 MB/sec        | 80.9M tokens/sec    | 3.53x             | 71.6%          |
+| 216.96 MB   | 25,000     | 1.26 mins     | 13.65 MB/sec        | 83.8M tokens/sec    | 3.66x             | 72.7%          |
+| 216.96 MB   | 50,000     | 1.38 mins     | 12.86 MB/sec        | 81.6M tokens/sec    | 3.80x             | 73.7%          |
+| 326.96 MB   | 50,000     | 2.09 mins     | 12.43 MB/sec        | 81.6M tokens/sec    | 3.84x             | 74.0%          |
+| 420.36 MB   | 100,000    | 4.06 mins     | 12.00 MB/sec        | 84.7M tokens/sec    | 3.96x             | 74.7%          |
 
 ## Requirements
 
