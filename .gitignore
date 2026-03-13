@@ -36,6 +36,7 @@ ENV/
 *~
 .DS_Store
 .cursor
+.windsurf
 
 # Jupyter Notebook
 .ipynb_checkpoints/

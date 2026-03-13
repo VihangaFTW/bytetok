@@ -7,7 +7,7 @@ import logging
 from ..errors import TokenizationError, VocabularyError
 
 from ..types import Token
-from .._trainer import _train_bpe
+from .._trainer import _train_bpe_from_tokens
 
 # need only classname for type annotation
 if TYPE_CHECKING:
@@ -52,13 +52,14 @@ class BasicTokenizer(Tokenizer):
         if isinstance(text, list):
             text = "".join(text)
 
-        tokens = list(text.encode("utf-8"))
-
         # merges beyond base byte vocabulary
         n_merges = vocab_size - 256
 
-        result = _train_bpe(
-            tokens, n_merges, verbose=verbose, show_progress=show_progress
+        result = _train_bpe_from_tokens(
+            tokens=list(text.encode("utf-8")),
+            n_merges=n_merges,
+            verbose=verbose,
+            show_progress=show_progress,
         )
 
         if result.n_merges_completed < n_merges:

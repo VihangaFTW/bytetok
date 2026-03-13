@@ -1,4 +1,4 @@
-//! BPE Converter - Efficient token encoding using learned merge rules.
+//! Efficient token encoding using learned merge rules.
 //!
 //! This implementation applies BPE merges to input token sequences using
 //! a priority queue approach inspired by the training algorithm from
@@ -11,6 +11,8 @@ use std::{
     cmp::Ordering,
     collections::{BinaryHeap, HashMap},
 };
+
+use rustc_hash::FxHashMap;
 
 use crate::{
     error::{DecodeError, SpecialTokenError},
@@ -80,7 +82,7 @@ pub(crate) struct BPEConverter {
     ///
     /// The merge_order indicates when this merge was learned during training,
     /// with lower values representing earlier merges.
-    merges: HashMap<Pair, (Token, MergeOrder)>,
+    merges: FxHashMap<Pair, (Token, MergeOrder)>,
 
     /// Maps token IDs to their byte sequences.
     ///
@@ -90,7 +92,7 @@ pub(crate) struct BPEConverter {
     /// Maps special token IDs to their corresponding byte sequences.
     ///
     /// Used during decoding to reconstruct the original byte representation of special tokens.
-    inverted_special_tokens: HashMap<Token, ByteVec>,
+    inverted_special_tokens: FxHashMap<Token, ByteVec>,
 }
 
 impl BPEConverter {
@@ -126,7 +128,7 @@ impl BPEConverter {
         merge_history: impl IntoIterator<Item = ((Token, Token), Token)>,
         special_tokens: &HashMap<String, Token>,
     ) -> Result<Self, SpecialTokenError> {
-        let mut merges = HashMap::new();
+        let mut merges = FxHashMap::default();
         let mut vocab: Vec<ByteVec> = Vec::new();
 
         // initialize base vocabulary (0-255 → single bytes).
@@ -135,33 +137,34 @@ impl BPEConverter {
         }
 
         for (merge_order, (pair, tok)) in merge_history.into_iter().enumerate() {
+            let merge_order = merge_order as MergeOrder;
             merges.insert(Pair(pair.0, pair.1), (tok, merge_order));
 
             // build vocabulary entry for merged token by concatenating constituent byte sequences
             // ensure vector can be safely indexed at position tok without panicking; O(1) time
             // ensure merge history is in order; otherwise O(N) time
-            while vocab.len() <= tok {
+            while vocab.len() <= tok as usize {
                 vocab.push(Vec::new());
             }
             // we cant reuse the vector pushed above due to borrow checker
             // not allowing simultaneous mutable and immutable borrow of vocab
             // solution is to use a temporary vector to accumulate byte sequence
             let mut merged_bytes = Vec::new();
-            if let Some(left_bytes) = vocab.get(pair.0) {
+            if let Some(left_bytes) = vocab.get(pair.0 as usize) {
                 merged_bytes.extend_from_slice(left_bytes);
             }
-            if let Some(right_bytes) = vocab.get(pair.1) {
+            if let Some(right_bytes) = vocab.get(pair.1 as usize) {
                 merged_bytes.extend_from_slice(right_bytes);
             }
-            vocab[tok] = merged_bytes;
+            vocab[tok as usize] = merged_bytes;
         }
 
         // track inverted mapping for decoding
-        let mut inverted_special_tokens: HashMap<Token, ByteVec> = HashMap::new();
+        let mut inverted_special_tokens: FxHashMap<Token, ByteVec> = FxHashMap::default();
 
         for (s, tok) in special_tokens.iter() {
             // ensure no special token overwrites an existing token
-            if *tok < vocab.len() {
+            if (*tok as usize) < vocab.len() {
                 return Err(SpecialTokenError::IllegalToken(*tok));
             }
             inverted_special_tokens.insert(*tok, s.as_bytes().to_vec());
@@ -279,7 +282,7 @@ impl BPEConverter {
         heap: &mut BinaryHeap<MergeCandidate>,
         results: &[Option<Token>],
         pos: usize,
-        merged_tok: usize,
+        merged_tok: Token,
         check_left: bool,
     ) {
         let mut idx;
@@ -393,7 +396,7 @@ impl BPEConverter {
     pub(crate) fn decode(&self, tokens: &[Token]) -> Result<ByteVec, DecodeError> {
         let mut result = Vec::new();
         for &token in tokens {
-            if let Some(bytes) = self.vocab.get(token) {
+            if let Some(bytes) = self.vocab.get(token as usize) {
                 result.extend_from_slice(bytes);
                 continue;
             }

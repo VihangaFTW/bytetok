@@ -106,3 +106,23 @@ impl From<SpecialTokenError> for TokenizerInitError {
         Self::InvalidSpecialToken(e)
     }
 }
+
+#[derive(Debug)]
+pub(crate) enum TrainerError {
+    /// The regex pattern failed to compile.
+    InvalidPattern(fancy_regex::Error),
+}
+
+impl fmt::Display for TrainerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidPattern(err) => write!(f, "invalid regex pattern: {err}"),
+        }
+    }
+}
+
+impl From<fancy_regex::Error> for TrainerError {
+    fn from(e: fancy_regex::Error) -> Self {
+        Self::InvalidPattern(e)
+    }
+}

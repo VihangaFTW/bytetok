@@ -3,6 +3,7 @@
 import pytest
 
 import bytetok as btok
+from bytetok.bpe import RustBPETrainer
 from bytetok.errors import TrainingError
 
 
@@ -158,3 +159,32 @@ def test_encode_batch_decode_batch(regex_tokenizer):
 def test_vocab_size_after_training(regex_tokenizer):
     """Vocab size is at least 256 after training."""
     assert regex_tokenizer.vocab_size() >= 256
+
+
+def test_rust_trainer_from_corpus_learns_merges():
+    """Corpus constructor initializes a trainer that can learn merges."""
+    trainer = RustBPETrainer.from_corpus(
+        "hello world hello world",
+        pattern=r"\w+",
+        min_count=1,
+    )
+
+    trainer.train(5, show_progress=False)
+
+    assert trainer.get_merge_history()
+
+
+def test_rust_trainer_from_corpus_has_no_flat_token_stream():
+    """Corpus trainers reject flat token reconstruction."""
+    trainer = RustBPETrainer.from_corpus("hello world", pattern=r"\w+")
+
+    with pytest.raises(
+        ValueError, match="token sequence is unavailable for corpus-based trainers"
+    ):
+        trainer.get_tokens()
+
+
+def test_rust_trainer_from_corpus_rejects_invalid_pattern():
+    """Corpus constructor raises on invalid regex patterns."""
+    with pytest.raises(ValueError, match="invalid regex pattern"):
+        RustBPETrainer.from_corpus("hello world", pattern="(")
