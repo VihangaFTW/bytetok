@@ -75,7 +75,7 @@ impl fmt::Display for EncodeError {
 #[derive(Debug)]
 pub(crate) enum SpecialTokenError {
     /// Token Id already exists in vocabulary.
-    IllegalToken(Token)
+    IllegalToken(Token),
 }
 
 impl fmt::Display for SpecialTokenError {
@@ -85,7 +85,6 @@ impl fmt::Display for SpecialTokenError {
         }
     }
 }
-
 
 /// Errors that can occur when initializing a tokenizer.
 #[derive(Debug)]
@@ -108,4 +107,22 @@ impl From<SpecialTokenError> for TokenizerInitError {
     }
 }
 
+#[derive(Debug)]
+pub(crate) enum TrainerError {
+    /// The regex pattern failed to compile.
+    InvalidPattern(fancy_regex::Error),
+}
 
+impl fmt::Display for TrainerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidPattern(err) => write!(f, "invalid regex pattern: {err}"),
+        }
+    }
+}
+
+impl From<fancy_regex::Error> for TrainerError {
+    fn from(e: fancy_regex::Error) -> Self {
+        Self::InvalidPattern(e)
+    }
+}

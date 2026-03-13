@@ -1,247 +1,205 @@
-//! Core BPE training algorithm (Algorithm 2).
+//! Trains a weighted byte-pair encoding model over deduplicated corpus pieces.
 //!
-//! Optimized implementation from
-//! ["A Formal Perspective on Byte-Pair Encoding"](https://aclanthology.org/2023.findings-acl.38.pdf).
+//! This module implements a BPE trainer that first pretokenizes the input
+//! corpus into unique byte sequences and tracks how often each sequence
+//! appears. Merge steps then operate on those weighted pieces instead of the
+//! full corpus, which reduces repeated work while preserving frequency counts.
 //!
-//! Time complexity: O(N log V) vs O(NV) for naive implementation.
+//! The trainer maintains live pair counts, a heap of candidate merges, and an
+//! ordered merge history that can be consumed by the converter layer.
+use std::{cmp::Ordering, collections::BinaryHeap};
 
-use std::{
-    cmp::Ordering,
-    collections::{BinaryHeap, HashMap, HashSet},
-    ops::ControlFlow,
+use fancy_regex::Regex;
+use rayon::prelude::*;
+use rustc_hash::FxHashMap;
+
+use crate::{
+    error::TrainerError,
+    types::{Count, Pair, Token},
 };
 
-use crate::types::{TextIdx, Token, TokenFreq, TokenPair};
+use indicatif::{ProgressBar, ProgressStyle};
 
-/// Node in doubly-linked list representing a token in the training sequence.
+// heuristic capacities chosen to reduce rehashing and heap rebuilds on large corpora
+const LOCAL_MAP_CAPACITY: usize = 8192;
+const PAIR_MAP_CAPACITY: usize = 4096;
+const CHUNK_BYTES: usize = 8 * 1024 * 1024;
+const HEAP_REBUILD_MARGIN: usize = 1000;
+
+/// Represents a unique tokenized piece and its corpus frequency.
 ///
-/// Uses index-based links rather than direct references to work within
-/// Rust's ownership system. Nodes are stored in a Vec<Option<Node>> arena.
-#[derive(Debug)]
-struct Node {
-    /// The token identifier at this position.
-    token: Token,
-
-    /// Index of the previous node in the sequence, if any.
-    prev_idx: Option<TextIdx>,
-
-    /// Index of the next node in the sequence, if any.
-    next_idx: Option<TextIdx>,
+/// A `Piece` stores the current token sequence for one distinct chunk produced
+/// during pretokenization together with the number of times that exact chunk
+/// occurs in the corpus.
+struct Piece {
+    // Current token sequence for this piece.
+    // Intially, tokens represented by their byte representation in [0-255].
+    tokens: Vec<Token>,
+    // Number of times this piece appears in the corpus.
+    count: Count,
 }
 
-/// Item in the max heap for tracking most frequent token pairs.
-///
-/// The heap may contain stale entries after merges, so frequencies
-/// must be validated against `pair_freqs` before use.
 #[derive(Debug, PartialEq, Eq)]
+/// Represents a candidate pair stored in the max-heap.
+///
+/// Heap items are ordered primarily by pair frequency and secondarily by the
+/// pair itself so merge selection remains deterministic across runs.
 struct HeapItem {
-    /// Frequency count of this token pair.
-    freq: TokenFreq,
-
-    /// The token pair being tracked.
-    pair: TokenPair,
+    pair: Pair,
+    count: Count,
 }
+
+/// Records weighted pair-count updates produced by merging within one piece.
+///
+/// Each entry stores the signed change that should be applied to the global
+/// live pair counts after replacing all occurrences of a chosen pair inside a
+/// single [`Piece`].
+type PairDelta = FxHashMap<Pair, i64>;
 
 impl PartialOrd for HeapItem {
+    /// Compares two heap items using the total ordering defined by [`Ord`].
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        // Ord implementation ensures all heap items are comparable.
         Some(self.cmp(other))
     }
 }
 
 impl Ord for HeapItem {
-    /// Compares by frequency (highest first), breaking ties by pair values.
+    /// Orders heap items by descending count with deterministic pair tie-breaks.
     fn cmp(&self, other: &Self) -> Ordering {
-        // Compare by freq between two pairs.
-        // Break tie by comparing pair values.
-        self.freq
-            .cmp(&other.freq)
+        self.count
+            .cmp(&other.count)
+            // not required; ensures deterministic tie-breaking among runs.
             .then_with(|| self.pair.0.cmp(&other.pair.0))
             .then_with(|| self.pair.1.cmp(&other.pair.1))
     }
 }
 
-/// BPE training structure.
+/// Trains weighted BPE merges from a pretokenized corpus.
 ///
-/// This trainer uses a *Vec-as-arena* pattern to represent a
-/// linked list of nodes. Direct `Node` ↔ `Node` references are
-/// avoided due to Rust's ownership and borrowing rules.
-///
-/// Nodes are stored in a `Vec<Option<Node>>`, where:
-/// - The `Vec` provides stable indices for nodes
-/// - Deletions are O(1) by setting entries to `None`
-/// - Traversal is done via index-based left/right links inside `Node`
-#[derive(Debug)]
+/// The trainer keeps deduplicated pieces, weighted adjacent-pair counts, and a
+/// max-heap of merge candidates. Each successful merge updates the tracked
+/// pieces in place and appends an entry to the merge history.
 pub(crate) struct BPETrainer {
-    /// Storage arena for nodes.
-    ///
-    /// `None` represents a deleted node.
-    nodes: Vec<Option<Node>>,
-
-    /// Vec index pointing linked list's head.
-    head_idx: Option<usize>,
-
-    /// Max heap of (frequency, pair) sorted by frequency.
-    ///
-    /// Contains stale entries that need to be guarded against.
+    /// All unique subwords/chunks in corpus after pretokenization.
+    pieces: Vec<Piece>,
+    /// Max-heap tracking the most common token pair.
     heap: BinaryHeap<HeapItem>,
-
-    /// Positions where each token pair occurs.
-    /// pair -> set of positions [index of first token of every pair].
-    ///
-    /// Source of truth for pair positions.
-    pair_positions: HashMap<TokenPair, HashSet<usize>>,
-
-    /// Current frequencies of each pair.
-    ///
-    /// Source of truth for pair frequencies.
-    pair_freqs: HashMap<TokenPair, usize>,
-
-    /// Next available merge token ID.
+    /// Weighted count per token pair. Source of truth.
+    /// Heap entries may be stale; always validate against this map.
+    live_pairs: FxHashMap<Pair, Count>,
+    /// Ordered merge history: (pair_merged, new_token_id).
+    merge_history: Vec<(Pair, Token)>,
+    /// Stop training early when best pair count drops below this.
+    min_count: Count,
+    /// Next available token ID for new merged tokens.
     next_tok: Token,
-
-    /// History of merges: (token_a, token_b) -> merged_token.
-    merge_history: Vec<((Token, Token), Token)>,
 }
 
 impl BPETrainer {
-    /// Create a new BPE trainer from an initial token sequence.
+    /// Builds a trainer from raw corpus text.
     ///
-    /// # Arguments
-    /// * `tokens` - Initial sequence of tokens (e.g., bytes 0-255)
-    /// * `next_tok` - Next available token ID (e.g., 256 for bytes)
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let tokens = vec![0, 1, 0, 1, 2];
-    /// let mut trainer = BPETrainer::new(tokens, 256);
-    /// ```
-    pub(crate) fn new(tokens: &[Token], next_tok: Token) -> Self {
-        let n = tokens.len();
-        // Create linked list storage.
-        let mut nodes = Vec::with_capacity(n);
-
-        for (i, &token) in tokens.iter().enumerate() {
-            let prev = if i > 0 { Some(i - 1) } else { None };
-            let next = if i < n - 1 { Some(i + 1) } else { None };
-            nodes.push(Some(Node {
-                token,
-                prev_idx: prev,
-                next_idx: next,
-            }));
-        }
-
-        // Handle case: tokens vec might be empty.
-        let head = if nodes.is_empty() { None } else { Some(0) };
-
-        let mut trainer = BPETrainer {
-            nodes,
-            head_idx: head,
-            heap: BinaryHeap::new(),
-            pair_positions: HashMap::new(),
-            pair_freqs: HashMap::new(),
-            next_tok,
-            merge_history: Vec::new(),
-        };
-
-        // Initialize fields with token pair counts.
-        trainer.build_initial_pairs();
-
-        trainer
-    }
-
-    /// Performs one merge operation.
-    ///
-    /// Based on Algorithm 2 from
-    /// ["A Formal Perspective on Byte-Pair Encoding"](https://aclanthology.org/2023.findings-acl.38.pdf).
-    ///
-    /// Returns `true` if a merge was performed, `false` if no pairs remain.
-    ///
-    /// # Time Complexity
-    ///
-    /// Worst case: `O(N log V)` where `N` is the token sequence length and `V` is the
-    /// vocabulary size. For reference, a naive implementation has worst case `O(N × V)`.
-    pub(crate) fn merge_step(&mut self) -> bool {
-        // Get the most frequent pair.
-        let (merge_pair, _merge_freq) = match self.get_max_pair() {
-            Some(pair) => pair,
-            // No pairs to merge.
-            None => return false,
-        };
-
-        #[cfg(debug_assertions)]
-        println!(
-            "Merging pair ({}, {}) -> token {}",
-            merge_pair.0, merge_pair.1, self.next_tok
-        );
-
-        // Get all positions where this token occurs.
-        // Note that we need to modify the positions so copy values.
-        // Explicit type Vec required here to let compiler know what to collect into.
-        let positions: Vec<TextIdx> = self
-            .pair_positions
-            .get(&merge_pair)
-            .map(|set| set.iter().copied().collect())
-            .unwrap_or_default();
-
-        // Update token id for next merge.
-        let new_tok_id = self.next_tok;
-        self.next_tok += 1;
-
-        // Process each occurrence of target pairs and perform a merge.
-        for &pos in &positions {
-            // Retrieve two node indices.
-            let (idx1, idx2) = match self.get_merge_idxs(merge_pair, pos) {
-                ControlFlow::Continue(idxs) => idxs,
-                ControlFlow::Break(_) => continue,
-            };
-
-            let cur_prev_idx = self.nodes[idx1].as_ref().and_then(|n| n.prev_idx);
-            let new_next_idx = self.nodes[idx2].as_ref().and_then(|n| n.next_idx);
-
-            // Remove old neighbours.
-            self.remove_neighbours(merge_pair, idx1, idx2);
-
-            // Perform merge in linked list.
-            self.merge_pair_in_list(new_next_idx, new_tok_id, idx1, idx2);
-
-            // Add new neighbours.
-            self.add_neighbours(new_tok_id, idx1, cur_prev_idx, new_next_idx);
-        }
-
-        // Record merge in history.
-        self.merge_history
-            .push(((merge_pair.0, merge_pair.1), new_tok_id));
-
-        // Un-track merged pair.
-        self.pair_freqs.remove(&merge_pair);
-        self.pair_positions.remove(&merge_pair);
-
-        true
-    }
-
-    /// Trains the BPE model by performing the specified number of merges.
-    ///
-    /// Repeatedly calls [`merge_step()`](Self::merge_step) up to `num_merges` times.
-    /// Stops early if no more pairs can be merged.
+    /// The corpus is first pretokenized into unique weighted pieces. The
+    /// trainer then computes initial pair frequencies and seeds the heap with
+    /// pairs whose counts satisfy `min_count`.
     ///
     /// # Arguments
     ///
-    /// * `num_merges` - Maximum number of merge operations to perform.
-    /// * `show_progress` - Whether to display a progress bar during training.
+    /// - `corpus` - The input text used for training.
+    /// - `pattern` - An optional regex used for pretokenization. When `None`
+    ///   or empty, whitespace splitting is used instead.
+    /// - `next_tok` - The first token ID available for learned merges.
+    /// - `min_count` - The minimum weighted pair count required for a merge to
+    ///   be considered.
+    ///
+    /// # Returns
+    ///
+    /// A newly initialized [`BPETrainer`].
     ///
     /// # Errors
     ///
-    /// Returns a [`TemplateError`](indicatif::style::TemplateError) if the progress bar
-    /// style template fails to compile.
+    /// Returns [`TrainerError`] if `pattern` is provided but fails to compile.
+    pub(crate) fn from_corpus(
+        corpus: &str,
+        pattern: Option<&str>,
+        next_tok: Token,
+        min_count: Count,
+    ) -> Result<Self, TrainerError> {
+        let pieces = Self::pretokenize(corpus, pattern)?;
+        let pair_freqs = Self::build_pair_counts(&pieces);
+        let heap = Self::build_heap(&pair_freqs, min_count);
+
+        Ok(Self {
+            pieces,
+            heap,
+            live_pairs: pair_freqs,
+            merge_history: Vec::new(),
+            min_count,
+            next_tok,
+        })
+    }
+
+    /// Builds a trainer from pre-aggregated token pieces.
+    ///
+    /// This constructor skips pretokenization and is primarily useful when
+    /// tests or upstream code already have weighted token sequences available.
+    ///
+    /// # Arguments
+    ///
+    /// - `pieces` - Pairs of token sequences and their frequencies.
+    /// - `next_tok` - The first token ID available for learned merges.
+    /// - `min_count` - The minimum weighted pair count required for a merge to
+    ///   be considered.
+    ///
+    /// # Returns
+    ///
+    /// A newly initialized [`BPETrainer`].
+    pub(crate) fn from_pieces(
+        pieces: Vec<(Vec<Token>, Count)>,
+        next_tok: Token,
+        min_count: Count,
+    ) -> Self {
+        // convert to Pieces
+        let pieces: Vec<Piece> = pieces
+            .into_iter()
+            .map(|(tokens, count)| Piece { tokens, count })
+            .collect();
+
+        let pair_freqs = Self::build_pair_counts(&pieces);
+        let heap = Self::build_heap(&pair_freqs, min_count);
+
+        Self {
+            pieces,
+            heap,
+            live_pairs: pair_freqs,
+            merge_history: Vec::new(),
+            min_count,
+            next_tok,
+        }
+    }
+
+    /// Runs up to `num_merges` weighted merge steps.
+    ///
+    /// Training stops early when no live pair remains whose weighted count is
+    /// at least `self.min_count`. When `show_progress` is `true`, a progress
+    /// bar is created for the requested merge budget.
+    ///
+    /// # Arguments
+    ///
+    /// - `num_merges` - The maximum number of merge steps to perform.
+    /// - `show_progress` - Whether to display a progress bar during training.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` after training completes or stops early.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the progress bar template cannot be constructed.
     pub(crate) fn train(
         &mut self,
         num_merges: usize,
         show_progress: bool,
     ) -> Result<(), indicatif::style::TemplateError> {
-        use indicatif::{ProgressBar, ProgressStyle};
-
         // create progress bar
         let progress = if show_progress {
             let pb = ProgressBar::new(num_merges as u64);
@@ -256,332 +214,545 @@ impl BPETrainer {
             None
         };
 
-        for _i in 0..num_merges {
+        for _ in 0..num_merges {
             if !self.merge_step() {
-                #[cfg(debug_assertions)]
-                println!("No more pairs to merge after {} merges", _i);
                 break;
             }
-            // advance progress bar after each merge step
+
             if let Some(pb) = &progress {
                 pb.inc(1);
             }
         }
 
         // clean up indicatif resources
-        if let Some(pb) =  &progress {
+        if let Some(pb) = &progress {
             pb.finish_and_clear();
         }
 
         Ok(())
     }
 
-    /// Returns the current token sequence as a vector.
+    /// Returns the learned merge history in converter-compatible form.
     ///
-    /// Traverses the linked list from head to tail, collecting all tokens.
-    ///
-    /// # Returns
-    ///
-    /// A vector containing the current token sequence after all merges performed so far.
-    pub(crate) fn encodings(&self) -> Vec<Token> {
-        let mut result = Vec::new();
-
-        let mut current = self.head_idx;
-
-        while let Some(idx) = current {
-            if let Some(node) = &self.nodes[idx] {
-                result.push(node.token);
-                current = node.next_idx;
-            } else {
-                break;
-            }
-        }
-
-        result
-    }
-
-    /// Returns the complete history of merge operations.
+    /// Each entry contains the merged pair and the token ID assigned to the
+    /// result, in the order the merges were learned.
     ///
     /// # Returns
     ///
-    /// A vector of tuples `((left_token, right_token), merged_token)` in the order
-    /// they were performed. This history is used by the converter to apply merges in
-    /// the correct order.
+    /// A vector of `((left, right), merged)` tuples describing the learned
+    /// merge sequence.
     pub(crate) fn merge_history(&self) -> Vec<((Token, Token), Token)> {
-        self.merge_history.clone()
+        self.merge_history
+            .iter()
+            .map(|(pair, tok)| ((pair.0, pair.1), *tok))
+            .collect()
     }
 
-    /// Builds initial pair frequencies from the linked list.
-    ///
-    /// Scans through the initial token sequence once, recording all adjacent
-    /// pairs and their frequencies, then populates the max heap.
-    ///
-    /// # Time Complexity
-    ///
-    /// O(N) where N is the length of the initial token sequence.
-    fn build_initial_pairs(&mut self) {
-        let mut cur_idx = self.head_idx;
-
-        // Record pair counts and positions.
-        while let Some(idx) = cur_idx {
-            // Pattern match to get node (initially to get head node).
-            if let Some(node) = &self.nodes[idx] {
-                // Pattern match next field to an index that maps to a node.
-                if let Some(next_idx) = node.next_idx
-                    && let Some(next_node) = &self.nodes[next_idx]
-                {
-                    let pair = TokenPair(node.token, next_node.token);
-                    // Increment pair frequency.
-                    *self.pair_freqs.entry(pair).or_insert(0) += 1;
-                    // Record pair position.
-                    self.pair_positions.entry(pair).or_default().insert(idx);
-                }
-                // Move onto the start of next pair.
-                cur_idx = node.next_idx;
-            } else {
-                break;
-            }
-        }
-
-        // Populate max heap with pair counts.
-        for (&pair, &freq) in &self.pair_freqs {
-            self.heap.push(HeapItem { freq, pair })
-        }
-    }
-
-    /// Removes and returns the most frequent token pair from the max heap.
-    ///
-    /// Continuously pops from the heap until finding an entry whose frequency
-    /// matches the current frequency in `pair_freqs`, filtering out stale entries.
+    /// Returns the number of unique weighted pieces tracked by the trainer.
     ///
     /// # Returns
     ///
-    /// `Some((pair, frequency))` if a valid pair exists, `None` if no pairs remain.
-    fn get_max_pair(&mut self) -> Option<(TokenPair, TokenFreq)> {
-        // After merges, some entries in the heap will have stale counts.
-        // So we need to keep popping from the heap until we find
-        // a pair that exists in current token sequence and validate its count.
-        while let Some(entry) = self.heap.pop() {
-            if let Some(&true_freq) = self.pair_freqs.get(&entry.pair)
-                && true_freq == entry.freq
-            {
-                return Some((entry.pair, entry.freq));
+    /// The number of distinct pieces produced during pretokenization or passed
+    /// to [`Self::from_pieces`].
+    pub(crate) fn num_pieces(&self) -> usize {
+        self.pieces.len()
+    }
+
+    /// Returns the number of currently live adjacent pairs.
+    ///
+    /// # Returns
+    ///
+    /// The number of pairs that still have a positive tracked count.
+    pub(crate) fn num_live_pairs(&self) -> usize {
+        self.live_pairs.len()
+    }
+
+    /// Performs a single weighted merge step.
+    ///
+    /// This selects the best currently live pair, merges it across all pieces,
+    /// applies the resulting pair-count deltas, and records the new token in
+    /// the merge history.
+    ///
+    /// # Returns
+    ///
+    /// `true` if a merge was performed, or `false` if no eligible pair
+    /// remained.
+    fn merge_step(&mut self) -> bool {
+        self.rebuild_heap_if_needed();
+
+        // get max pair
+        let (best_pair, _) = match self.max_pair() {
+            Some(pair) => pair,
+            _ => return false,
+        };
+
+        let new_token = self.next_tok;
+
+        // merge best pairs across all pieces in parallel
+        let deltas: Vec<PairDelta> = self
+            .pieces
+            .par_iter_mut()
+            // discard None outputs while mapping
+            .filter_map(|piece| Self::merge_in_piece(piece, best_pair, new_token))
+            .collect();
+
+        for delta in deltas {
+            self.apply_delta(delta);
+        }
+        // this pair no longer exists
+        self.live_pairs.remove(&best_pair);
+        // track new merge
+        self.merge_history.push((best_pair, new_token));
+
+        self.next_tok = new_token + 1;
+
+        true
+    }
+
+    /// Removes and returns the highest-priority live pair from the heap.
+    ///
+    /// Heap entries may be stale because pair counts are updated lazily. This
+    /// method validates each popped item against `self.live_pairs` and
+    /// requeues refreshed counts when needed.
+    ///
+    /// # Returns
+    ///
+    /// `Some((pair, count))` for the best currently valid pair, or `None` if
+    /// no live pair satisfies `self.min_count`.
+    fn max_pair(&mut self) -> Option<(Pair, Count)> {
+        // heap can contain items with stale counts
+        while let Some(item) = self.heap.pop() {
+            if let Some(&true_count) = self.live_pairs.get(&item.pair) {
+                if true_count == item.count && true_count >= self.min_count {
+                    return Some((item.pair, item.count));
+                }
+                // update pair's count if its above min freq
+                if true_count >= self.min_count && true_count > 0 {
+                    self.heap.push(HeapItem {
+                        pair: item.pair,
+                        count: true_count,
+                    });
+                }
+                // stale entry with true count below min_freq; continue popping
             }
-            // Stale entry, discard it and keep on popping until we get a valid pair.
+
+            // pair doesnt exist in source of truth; ignore
         }
 
+        // heap empty
         None
     }
 
-    /// Updates bookkeeping for a pair occurrence being removed.
+    /// Rebuilds the heap when stale entries become too numerous.
     ///
-    /// Decrements the pair's frequency and removes its position from tracking.
-    /// Called when neighbor pairs are invalidated after a merge.
-    ///
-    /// # Arguments
-    ///
-    /// * `idx` - Position where the pair occurrence is being removed.
-    /// * `pair` - The token pair being removed.
-    ///
-    /// # Note
-    ///
-    /// This only updates tracking structures; the actual linked list nodes are not modified.
-    fn remove_pair_at(&mut self, idx: TextIdx, pair: TokenPair) {
-        // Decrement count.
-        if let Some(freq) = self.pair_freqs.get_mut(&pair)
-            && *freq > 0
-        {
-            *freq -= 1;
-        }
+    /// This keeps heap operations efficient by discarding outdated items once
+    /// the heap grows substantially larger than the source-of-truth pair map.
+    fn rebuild_heap_if_needed(&mut self) {
+        let heap_size = self.heap.len();
+        let live_size = self.live_pairs.len();
 
-        // Remove start position.
-        if let Some(pos_set) = self.pair_positions.get_mut(&pair) {
-            pos_set.remove(&idx);
+        // allow some lee-way because rebuilding heap is expensive: O(|live_pairs|)
+        if heap_size > live_size.saturating_mul(2) + HEAP_REBUILD_MARGIN {
+            self.heap = Self::build_heap(&self.live_pairs, self.min_count);
         }
     }
 
-    /// Adds a new pair occurrence at a specific position.
+    /// Applies weighted pair-count deltas to the global live-pair map.
     ///
-    /// Increments the pair's frequency, records its position, and adds it to the heap.
-    /// Called when new mergeable pairs appear after a merge operation.
-    ///
-    /// # Arguments
-    ///
-    /// * `idx` - Position where the pair occurs.
-    /// * `pair` - The token pair being added.
-    ///
-    /// # Note
-    ///
-    /// This only updates tracking structures; the actual linked list nodes are not modified.
-    fn add_pair_at(&mut self, idx: usize, pair: TokenPair) {
-        // Add position.
-        self.pair_positions.entry(pair).or_default().insert(idx);
-        // Increment freq.
-        let freq = self.pair_freqs.entry(pair).or_insert(0);
-        *freq += 1;
-
-        // Add new pair in heap.
-        self.heap.push(HeapItem { freq: *freq, pair });
-    }
-
-    /// Adds new neighbor pairs formed after a merge operation.
-    ///
-    /// After merging two tokens, the new merged token may form new pairs with
-    /// its left and right neighbors that need to be tracked.
+    /// Updated pairs are reinserted into the heap when their new counts remain
+    /// at or above `self.min_count`, and pairs whose counts drop to zero are
+    /// removed entirely.
     ///
     /// # Arguments
     ///
-    /// * `new_tok_id` - The token ID of the newly merged token.
-    /// * `idx1` - Position of the merged token.
-    /// * `cur_prev_idx` - Index of the left neighbor, if any.
-    /// * `new_next_idx` - Index of the right neighbor, if any.
-    fn add_neighbours(
-        &mut self,
-        new_tok_id: TextIdx,
-        idx1: TextIdx,
-        cur_prev_idx: Option<usize>,
-        new_next_idx: Option<TextIdx>,
-    ) {
-        // Increment freq for new left pair and track new position.
-        if let Some(prev_idx) = cur_prev_idx
-            && let Some(prev_node) = &self.nodes[prev_idx]
-        {
-            let new_pair = TokenPair(prev_node.token, new_tok_id);
-            self.add_pair_at(prev_idx, new_pair);
-        }
+    /// - `deltas` - The signed count adjustments produced by a piece-level
+    ///   merge.
+    fn apply_delta(&mut self, deltas: PairDelta) {
+        for (pair, change) in deltas {
+            // copying here so we can set a default
+            // without side effects on truth source
+            let target_count = self.live_pairs.get(&pair).copied().unwrap_or(0) as i64;
 
-        // Increment freq for new right pair and track new position.
-        if let Some(next_idx) = new_next_idx
-            && let Some(next_node) = &self.nodes[next_idx]
-        {
-            let new_pair = TokenPair(new_tok_id, next_node.token);
-            self.add_pair_at(idx1, new_pair);
+            let new_count = (target_count + change).max(0) as Count;
+
+            // remove dead pair; continue onto next pair
+            if new_count == 0 {
+                self.live_pairs.remove(&pair);
+                continue;
+            }
+
+            // update live pair count
+            self.live_pairs.insert(pair, new_count);
+
+            // track updated pair in heap
+            if new_count >= self.min_count {
+                self.heap.push(HeapItem {
+                    pair,
+                    count: new_count,
+                });
+            }
         }
     }
 
-    /// Performs the actual merge operation in the linked list.
+    /// Merges every occurrence of `best_pair` within a single piece.
     ///
-    /// Updates the first node to contain the merged token, relinks the list to
-    /// skip the second node, and marks the second node as deleted.
+    /// This helper rewrites `piece.tokens` by replacing each non-overlapping
+    /// occurrence of `best_pair` with `new_token`. It also computes the
+    /// corresponding weighted adjustments to global pair counts so the caller
+    /// can update training state without rebuilding counts from scratch.
     ///
-    /// # Arguments
-    ///
-    /// * `next_idx` - Index of the node after the merge pair.
-    /// * `tok_id` - Token ID of the merged token.
-    /// * `idx1` - Index of the first node in the pair.
-    /// * `idx2` - Index of the second node in the pair (will be marked deleted).
-    fn merge_pair_in_list(
-        &mut self,
-        next_idx: Option<TextIdx>,
-        tok_id: Token,
-        idx1: TextIdx,
-        idx2: TextIdx,
-    ) {
-        // Update first token of pair to contain merged token.
-        if let Some(node) = &mut self.nodes[idx1] {
-            node.token = tok_id;
-            node.next_idx = next_idx;
-        }
-
-        // Update new right's prev pointer to merged token.
-        if let Some(new_right_idx) = next_idx
-            && let Some(new_right_node) = &mut self.nodes[new_right_idx]
-        {
-            new_right_node.prev_idx = Some(idx1);
-        }
-
-        // Mark second token of merge pair as deleted.
-        self.nodes[idx2] = None;
-    }
-
-    /// Removes old neighbor pairs that become invalid after a merge.
-    ///
-    /// When two tokens are merged, their pairs with their left and right neighbors
-    /// are no longer valid and must be removed from tracking.
+    /// If the piece has fewer than two tokens, or if `best_pair` does not
+    /// occur in the piece, this function returns `None` and leaves the piece
+    /// unchanged.
     ///
     /// # Arguments
     ///
-    /// * `merge_pair` - The pair being merged.
-    /// * `idx1` - Index of the first token in the merge pair.
-    /// * `idx2` - Index of the second token in the merge pair.
-    fn remove_neighbours(&mut self, merge_pair: TokenPair, idx1: TextIdx, idx2: TextIdx) {
-        // Remove old left neighbour if it exists.
-        if let Some(prev_idx) = self.nodes[idx1].as_ref().and_then(|n| n.prev_idx)
-            // Check if prev node (token) exists.
-            && let Some(prev_node) = &self.nodes[prev_idx]
-        {
-            let old_pair = TokenPair(prev_node.token, merge_pair.0);
-            self.remove_pair_at(prev_idx, old_pair);
-        }
-
-        // Remove old right neighbour if it exists.
-        if let Some(next_idx) = self.nodes[idx2].as_ref().and_then(|n| n.next_idx)
-            && let Some(next_node) = &self.nodes[next_idx]
-        {
-            let old_pair = TokenPair(merge_pair.1, next_node.token);
-            self.remove_pair_at(idx2, old_pair);
-        }
-    }
-
-    /// Extracts and verifies the indices of two nodes for a merge operation.
-    ///
-    /// Validates that the pair still exists at the given position and hasn't
-    /// been invalidated by previous merges.
-    ///
-    /// # Arguments
-    ///
-    /// * `pair` - The token pair to verify.
-    /// * `pos` - Position where the pair is expected to start.
+    /// - `piece` - The piece to update in place.
+    /// - `best_pair` - The adjacent token pair to merge.
+    /// - `new_token` - The token that replaces each merged occurrence.
     ///
     /// # Returns
     ///
-    /// `Continue((idx1, idx2))` with the node indices if valid, or `Break(())` if invalid.
-    fn get_merge_idxs(
-        &mut self,
-        pair: TokenPair,
-        pos: TextIdx,
-    ) -> ControlFlow<(), (TextIdx, TextIdx)> {
-        let idx1 = pos;
-        // Retrieve pair's remaining token index.
-        let idx2 = match &self.nodes[idx1] {
-            Some(node1) => match node1.next_idx {
-                Some(idx2) => idx2,
-                // Invalid next token (node deleted by previous merge).
-                None => return ControlFlow::Break(()),
-            },
-            // Invalid start token (node deleted by a previous merge).
-            None => return ControlFlow::Break(()),
-        };
+    /// `Some(PairDelta)` containing weighted pair-count changes when at least
+    /// one merge is applied, or `None` if the piece does not contain
+    /// `best_pair`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let mut piece = Piece {
+    ///     tokens: vec![1, 2, 3],
+    ///     count: 2,
+    /// };
+    ///
+    /// let delta = WeightedBPETrainer::merge_in_piece(&mut piece, Pair(1, 2), 256);
+    ///
+    /// assert!(delta.is_some());
+    /// assert_eq!(piece.tokens, vec![256, 3]);
+    /// ```
+    fn merge_in_piece(piece: &mut Piece, best_pair: Pair, new_token: Token) -> Option<PairDelta> {
+        let tokens = piece.tokens.as_slice();
 
-        let is_target = match (&self.nodes[idx1], &self.nodes[idx2]) {
-            (Some(node1), Some(node2)) => node1.token == pair.0 && node2.token == pair.1,
-            _ => false,
-        };
-
-        // Verify this is still the target pair.
-        if !is_target {
-            return ControlFlow::Break(());
+        if tokens.len() < 2 {
+            return None;
         }
 
-        ControlFlow::Continue((idx1, idx2))
+        // check for at least one best pair match
+        if !tokens
+            .windows(2)
+            .any(|pair| pair[0] == best_pair.0 && pair[1] == best_pair.1)
+        {
+            return None;
+        }
+        // diff pair counts before and after the rewrite so adjacent merges stay correct
+        let mut delta: PairDelta =
+            FxHashMap::with_capacity_and_hasher(PAIR_MAP_CAPACITY, Default::default());
+
+        let mut new_tokens: Vec<Token> = Vec::with_capacity(tokens.len());
+
+        let mut i = 0usize;
+
+        while i < tokens.len() {
+            if i + 1 < tokens.len() && tokens[i] == best_pair.0 && tokens[i + 1] == best_pair.1 {
+                new_tokens.push(new_token);
+                i += 2;
+            } else {
+                new_tokens.push(tokens[i]);
+                i += 1;
+            }
+        }
+
+        let piece_count = piece.count as i64;
+        Self::accumulate_pair_delta(tokens, -piece_count, &mut delta);
+        Self::accumulate_pair_delta(&new_tokens, piece_count, &mut delta);
+
+        piece.tokens = new_tokens;
+        Some(delta)
     }
 
-    /// Prints the current state for debugging purposes.
-    ///
-    /// Outputs the current token sequence and the top 5 most frequent pairs.
-    pub(crate) fn print_state(&self) {
-        print!("Tokens: ");
-        for token in self.encodings() {
-            print!("{} ", token);
+    /// Applies one signed pair-count contribution for every adjacent pair.
+    fn accumulate_pair_delta(tokens: &[Token], weight: i64, delta: &mut PairDelta) {
+        for window in tokens.windows(2) {
+            let pair = Pair(window[0], window[1]);
+            *delta.entry(pair).or_insert(0) += weight;
         }
-        println!();
+    }
 
-        println!("Top pairs:");
-        let mut pairs: Vec<_> = self.pair_freqs.iter().collect();
-        pairs.sort_by(|a, b| b.1.cmp(a.1));
-        for (pair, freq) in pairs.iter().take(5) {
-            println!("  ({}, {}) : {}", pair.0, pair.1, freq);
+    /// Pretokenizes the corpus into unique weighted pieces.
+    ///
+    /// When a regex pattern is provided, all matches are counted directly.
+    /// Otherwise each chunk is split with `split_whitespace`. The resulting
+    /// byte slices are converted into [`Piece`] values whose initial tokens are
+    /// raw byte values in the range `0..=255`.
+    ///
+    /// # Arguments
+    ///
+    /// - `corpus` - The input text to split into pieces.
+    /// - `pattern` - An optional regex used to extract pieces.
+    ///
+    /// # Returns
+    ///
+    /// A vector of unique weighted pieces.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TrainerError`] if `pattern` is provided but fails to compile.
+    fn pretokenize(corpus: &str, pattern: Option<&str>) -> Result<Vec<Piece>, TrainerError> {
+        if corpus.is_empty() {
+            return Ok(Vec::new());
         }
+
+        let chunks = Self::pretok_newline_chunks(corpus, CHUNK_BYTES);
+
+        // collect all regex matches and accumulate chunk frequencies
+        let chunk_count: FxHashMap<&[u8], Count> = match pattern {
+            Some(pat) if !pat.is_empty() => {
+                // ensure pattern compiles upfront
+                let _ =
+                    fancy_regex::Regex::new(pat).map_err(|e| TrainerError::InvalidPattern(e))?;
+
+                chunks
+                    .into_par_iter()
+                    .fold(
+                        || {
+                            (
+                                fancy_regex::Regex::new(pat).expect("pattern was validated"),
+                                // thousands of unique chunks to process on average
+                                // start with buffer to avoid expensive rehash cycles
+                                FxHashMap::with_capacity_and_hasher(
+                                    LOCAL_MAP_CAPACITY,
+                                    Default::default(),
+                                ),
+                            )
+                        },
+                        |(re, mut map), line| {
+                            Self::pretok_count_matches(&re, line, &mut map);
+                            (re, map)
+                        },
+                    )
+                    .map(|(_, map)| map)
+                    .reduce(
+                        || {
+                            FxHashMap::with_capacity_and_hasher(
+                                LOCAL_MAP_CAPACITY,
+                                Default::default(),
+                            )
+                        },
+                        |mut a_map, l_map| {
+                            for (chunk, count) in l_map {
+                                *a_map.entry(chunk).or_insert(0) += count;
+                            }
+                            a_map
+                        },
+                    )
+            }
+            // no pattern provided; split each line by whitespace
+            _ => chunks
+                .into_par_iter()
+                .fold(
+                    || FxHashMap::with_capacity_and_hasher(LOCAL_MAP_CAPACITY, Default::default()),
+                    |mut map, line| {
+                        for chunk in line.split_whitespace() {
+                            *map.entry(chunk.as_bytes()).or_insert(0) += 1;
+                        }
+                        map
+                    },
+                )
+                .reduce(
+                    || FxHashMap::with_capacity_and_hasher(LOCAL_MAP_CAPACITY, Default::default()),
+                    |mut a_map, l_map| {
+                        for (chunk, count) in l_map {
+                            *a_map.entry(chunk).or_insert(0) += count;
+                        }
+                        a_map
+                    },
+                ),
+        };
+
+        Ok(Self::pretok_map_to_pieces(chunk_count))
+    }
+
+    /// Counts regex matches from one text chunk into a local frequency map.
+    ///
+    /// Empty matches are skipped by advancing one Unicode scalar value to avoid
+    /// infinite loops without breaking UTF-8 boundaries.
+    ///
+    /// # Arguments
+    ///
+    /// - `re` - The compiled regex used for matching.
+    /// - `text` - The chunk of text to scan.
+    /// - `map` - The local map that accumulates byte-slice counts.
+    fn pretok_count_matches<'a>(re: &Regex, text: &'a str, map: &mut FxHashMap<&'a [u8], Count>) {
+        // fancy regex returns result for matches
+        // manual loop required
+        let mut start = 0;
+
+        while start <= text.len() {
+            match re.find_from_pos(text, start) {
+                Ok(Some(m)) => {
+                    if m.start() == m.end() {
+                        start = match text[m.end()..].chars().next() {
+                            Some(ch) => m.end() + ch.len_utf8(),
+                            None => break,
+                        };
+                        continue;
+                    }
+                    *map.entry(m.as_str().as_bytes()).or_insert(0) += 1;
+                    start = m.end();
+                }
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+    }
+
+    /// Splits the corpus into newline-aligned chunks for parallel processing.
+    ///
+    /// This keeps the exact bytes of each newline inside its chunk so regex
+    /// matching still sees the original text layout while avoiding splits in
+    /// the middle of a line whenever possible.
+    ///
+    /// # Arguments
+    ///
+    /// - `corpus` - The full input corpus.
+    /// - `target_bytes` - The approximate target size for each chunk.
+    ///
+    /// # Returns
+    ///
+    /// A vector of borrowed string slices covering the full corpus.
+    fn pretok_newline_chunks(corpus: &str, target_bytes: usize) -> Vec<&str> {
+        if corpus.len() <= target_bytes {
+            return vec![corpus];
+        }
+
+        let mut chunks = Vec::with_capacity(corpus.len().div_ceil(target_bytes));
+
+        let bytes = corpus.as_bytes();
+        // start of line
+        let mut start = 0usize;
+        // end of line; pos after actual newline byte(s)
+        let mut last_nl_end = 0usize;
+
+        for (i, &byte) in bytes.iter().enumerate() {
+            if byte == b'\n' {
+                // preserve the newline byte(s) inside chunk
+                last_nl_end = i + 1;
+            }
+            // avoid splitting middle of line to ensure correct regex behavior
+            // ensures chunk is split after at least one newline encountered
+            if i + 1 - start >= target_bytes && start < last_nl_end {
+                //  split chunk ending in newline
+                chunks.push(&corpus[start..last_nl_end]);
+                start = last_nl_end;
+            }
+        }
+
+        // last chunk might not end with newline
+        // manually add trailing bytes to avoid missing corpus end
+        if start < corpus.len() {
+            chunks.push(&corpus[start..]);
+        }
+        // no newline in corpus
+        if chunks.is_empty() {
+            chunks.push(corpus)
+        }
+
+        chunks
+    }
+
+    /// Converts counted byte slices into owned [`Piece`] values.
+    ///
+    /// # Arguments
+    ///
+    /// - `chunk_count` - Weighted byte-slice counts collected during
+    ///   pretokenization.
+    ///
+    /// # Returns
+    ///
+    /// A vector of owned pieces whose tokens are initialized from raw bytes.
+    fn pretok_map_to_pieces(chunk_count: FxHashMap<&[u8], Count>) -> Vec<Piece> {
+        chunk_count
+            .into_iter()
+            .map(|(bytes, count)| Piece {
+                tokens: bytes.iter().map(|&b| b as Token).collect(),
+                count,
+            })
+            .collect()
+    }
+
+    /// Builds weighted adjacent-pair counts across all pieces.
+    ///
+    /// Small inputs are counted serially, while larger inputs use Rayon to
+    /// build local maps and reduce them into a single result.
+    ///
+    /// # Arguments
+    ///
+    /// - `pieces` - The pieces whose adjacent token pairs should be counted.
+    ///
+    /// # Returns
+    ///
+    /// A map from token pair to weighted occurrence count.
+    fn build_pair_counts(pieces: &[Piece]) -> FxHashMap<Pair, Count> {
+        // serial processing for smaller batch
+        if pieces.len() < 1_000 {
+            let mut pair_counts =
+                FxHashMap::with_capacity_and_hasher(LOCAL_MAP_CAPACITY, Default::default());
+
+            for piece in pieces {
+                for window in piece.tokens.windows(2) {
+                    let pair = Pair(window[0], window[1]);
+                    *pair_counts.entry(pair).or_insert(0) += piece.count;
+                }
+            }
+
+            return pair_counts;
+        }
+
+        // parallel processing for bigger batches
+        pieces
+            .par_iter()
+            .fold(
+                || FxHashMap::with_capacity_and_hasher(LOCAL_MAP_CAPACITY, Default::default()),
+                |mut local_map, piece| {
+                    for window in piece.tokens.windows(2) {
+                        let pair = Pair(window[0], window[1]);
+                        *local_map.entry(pair).or_insert(0) += piece.count;
+                    }
+                    local_map
+                },
+            )
+            .reduce(
+                || FxHashMap::with_capacity_and_hasher(LOCAL_MAP_CAPACITY, Default::default()),
+                |mut acum_map, local_map| {
+                    for (pair, count) in local_map {
+                        *acum_map.entry(pair).or_insert(0) += count;
+                    }
+                    acum_map
+                },
+            )
+    }
+
+    /// Builds a max-heap of candidate merges from pair counts.
+    ///
+    /// Only pairs whose counts are at least `min_count` are included.
+    ///
+    /// # Arguments
+    ///
+    /// - `pair_counts` - The source-of-truth weighted pair counts.
+    /// - `min_count` - The minimum count a pair must have to be inserted.
+    ///
+    /// # Returns
+    ///
+    /// A heap ordered by pair frequency with deterministic tie-breaking.
+    fn build_heap(pair_counts: &FxHashMap<Pair, Count>, min_count: Count) -> BinaryHeap<HeapItem> {
+        pair_counts
+            .iter()
+            .filter(|(_, count)| **count >= min_count)
+            .map(|(pair, count)| HeapItem {
+                pair: *pair,
+                count: *count,
+            })
+            .collect()
     }
 }
 
@@ -589,37 +760,148 @@ impl BPETrainer {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_basic_merge() {
-        let tokens = [0, 1, 0, 0, 1, 1, 0, 0];
-        let mut trainer = BPETrainer::new(&tokens, 2);
-        trainer.train(3, false).expect("progress bar template should be parseable");
-        let final_tokens = trainer.encodings();
-        // Should have fewer tokens than we started with.
-        assert!(final_tokens.len() < 8);
+    fn trainer_from_str(s: &str, min_freq: Count) -> BPETrainer {
+        BPETrainer::from_corpus(s, None, 256, min_freq)
+            .expect("reference trainer should build")
     }
 
     #[test]
-    fn test_empty_sequence() {
-        let tokens = [];
-        let trainer = BPETrainer::new(&tokens, 0);
-        assert_eq!(trainer.encodings(), Vec::<usize>::new());
+    fn test_pretokenize_counts() {
+        let pieces = BPETrainer::pretokenize("the the the cat cat", None)
+            .expect("pretokenization should succeed");
+
+        assert_eq!(pieces.len(), 2);
+        let the_piece = pieces
+            .iter()
+            .find(|piece| piece.tokens == vec![116, 104, 101]);
+        let cat_piece = pieces
+            .iter()
+            .find(|piece| piece.tokens == vec![99, 97, 116]);
+        assert_eq!(the_piece.map(|piece| piece.count), Some(3));
+        assert_eq!(cat_piece.map(|piece| piece.count), Some(2));
     }
 
     #[test]
-    fn test_single_token() {
-        let tokens = [0];
-        let trainer = BPETrainer::new(&tokens, 1);
-        assert_eq!(trainer.encodings(), vec![0]);
+    fn test_pretokenize_with_regex() {
+        let pieces = BPETrainer::pretokenize("hello world hello", Some(r"\w+"))
+            .expect("regex pretokenization should succeed");
+
+        assert_eq!(pieces.len(), 2);
     }
 
     #[test]
-    fn test_no_merges_needed() {
-        let tokens = [0, 1, 2, 3];
-        let mut trainer = BPETrainer::new(&tokens, 4);
-        // Try to merge but no pairs repeat.
+    fn test_pretokenize_preserves_newlines() {
+        let pieces = BPETrainer::pretokenize("a\n\nb", Some(r"\s*[\r\n]+|\S+"))
+            .expect("regex pretokenization should succeed");
+
+        assert!(pieces.iter().any(|piece| piece.tokens == vec![97]));
+        assert!(pieces.iter().any(|piece| piece.tokens == vec![10, 10]));
+        assert!(pieces.iter().any(|piece| piece.tokens == vec![98]));
+    }
+
+    #[test]
+    fn test_pair_freqs_weighted() {
+        let pieces = vec![
+            Piece {
+                tokens: vec![97, 98],
+                count: 3,
+            },
+            Piece {
+                tokens: vec![97, 98],
+                count: 2,
+            },
+        ];
+
+        let freqs = BPETrainer::build_pair_counts(&pieces);
+        assert_eq!(freqs.get(&Pair(97, 98)), Some(&5));
+    }
+
+    #[test]
+    fn test_single_merge() {
+        let mut trainer = trainer_from_str("aaab aaab", 1);
+        assert!(trainer.num_pieces() > 0);
+
         let merged = trainer.merge_step();
-        // Should successfully merge once (any adjacent pair).
         assert!(merged);
+        assert_eq!(trainer.merge_history().len(), 1);
+    }
+
+    #[test]
+    fn test_full_training() {
+        let mut trainer = trainer_from_str("the cat sat on the mat the cat sat", 1);
+        trainer.train(20, false).expect("training should succeed");
+
+        assert!(!trainer.merge_history().is_empty());
+        assert!(trainer.merge_history().len() <= 20);
+    }
+
+    #[test]
+    fn test_min_frequency_pruning() {
+        let mut trainer = trainer_from_str("ab cd ef", 2);
+        assert!(!trainer.merge_step());
+    }
+
+    #[test]
+    fn test_empty_corpus() {
+        let trainer = trainer_from_str("", 1);
+        assert_eq!(trainer.num_pieces(), 0);
+    }
+
+    #[test]
+    fn test_merge_history_format() {
+        let mut trainer = trainer_from_str("abab abab abab", 1);
+        trainer.train(2, false).expect("training should succeed");
+
+        for ((left, right), merged) in trainer.merge_history() {
+            assert!(left <= merged);
+            assert!(right <= merged || right < 256);
+            assert!(merged >= 256);
+        }
+    }
+
+    #[test]
+    fn test_deterministic_merges() {
+        let mut t1 = trainer_from_str("hello world hello world foo bar foo", 1);
+        let mut t2 = trainer_from_str("hello world hello world foo bar foo", 1);
+
+        t1.train(10, false).expect("training should succeed");
+        t2.train(10, false).expect("training should succeed");
+
+        assert_eq!(t1.merge_history(), t2.merge_history());
+    }
+
+    #[test]
+    fn test_from_pieces_constructor() {
+        let pieces = vec![(vec![97, 98, 99], 10), (vec![100, 101], 5)];
+        let mut trainer = BPETrainer::from_pieces(pieces, 256, 1);
+
+        assert_eq!(trainer.num_pieces(), 2);
+        trainer.train(5, false).expect("training should succeed");
+        assert!(!trainer.merge_history().is_empty());
+    }
+
+    #[test]
+    fn test_merge_in_piece_diffs_adjacent_rewrites_correctly() {
+        let mut piece = Piece {
+            tokens: vec![1, 2, 1, 2],
+            count: 1,
+        };
+
+        let delta = BPETrainer::merge_in_piece(&mut piece, Pair(1, 2), 256)
+            .expect("piece should contain the target pair");
+
+        assert_eq!(piece.tokens, vec![256, 256]);
+        assert_eq!(delta.get(&Pair(1, 2)), Some(&-2));
+        assert_eq!(delta.get(&Pair(2, 1)), Some(&-1));
+        assert_eq!(delta.get(&Pair(256, 256)), Some(&1));
+    }
+
+    #[test]
+    fn test_pretok_empty_match_advances_on_char_boundary() {
+        let pieces = BPETrainer::pretokenize("éa", Some(r"(?=é)|."))
+            .expect("regex pretokenization should succeed");
+
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(pieces[0].tokens, vec![97]);
     }
 }

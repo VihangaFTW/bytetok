@@ -1,6 +1,5 @@
 """Regex-based byte-level tokenizer implementation."""
 
-import regex as re
 import logging
 from typing import override
 
@@ -12,7 +11,7 @@ from ..strategy import SpecialTokenStrategy
 from ..types import (
     Token,
 )
-from .._trainer import _train_bpe
+from .._trainer import BPETrainingResult, _train_bpe_from_corpus
 
 
 from .base import Tokenizer
@@ -49,14 +48,22 @@ class RegexTokenizer(Tokenizer):
         show_progress: bool = True,
     ) -> None:
         """
-        Train on regex-split text chunks.
+        Train the tokenizer on text split by the configured regex pattern.
 
-        Input is segmented by the configured pattern, then flattened into
-        UTF-8 byte tokens for BPE merge learning.
+        The input is normalized to a single corpus string and then passed to the
+        Rust trainer, which performs regex-based pretokenization and BPE merge
+        learning. Training starts from the base 256 byte vocabulary and targets
+        `vocab_size` total tokens. If no more mergeable pairs remain, training
+        may stop before reaching the requested size.
 
-        :param verbose: Log each learned merge when ``True``.
-        :raises VocabularyError: If ``vocab_size`` is less than or equal to 256.
-        :raises TrainingError: If no trainable byte tokens are produced.
+        Args:
+            text: Training corpus as a single string or a list of strings.
+            vocab_size: Target vocabulary size, including the base byte tokens.
+            verbose: Whether to log each learned merge.
+            show_progress: Whether to show Rust-side training progress.
+
+        Raises:
+            VocabularyError: If `vocab_size` is less than or equal to `256`.
         """
         if vocab_size <= 256:
             raise VocabularyError(
@@ -66,17 +73,15 @@ class RegexTokenizer(Tokenizer):
         # handle list input and convert text to bytes
         if isinstance(text, list):
             text = "".join(text)
-        # split text into chunks defined by pattern
-        chunks = [m.group(0) for m in re.finditer(self.pat, text)]
-        # convert each chunk to byte sequence and flatten into single sequence
-        tokens: list[int] = []
-        for chunk in chunks:
-            tokens.extend(list(chunk.encode("utf-8", errors="replace")))
 
         n_merges = vocab_size - 256
 
-        result = _train_bpe(
-            tokens, n_merges, verbose=verbose, show_progress=show_progress
+        result: BPETrainingResult = _train_bpe_from_corpus(
+            corpus=text,
+            pattern=self.pat,
+            n_merges=n_merges,
+            verbose=verbose,
+            show_progress=show_progress,
         )
 
         if result.n_merges_completed < n_merges:

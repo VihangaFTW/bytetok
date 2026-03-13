@@ -5,11 +5,11 @@
 ![Python versions](https://img.shields.io/pypi/pyversions/bytetok?cacheSeconds=300)
 ![License](https://img.shields.io/github/license/VihangaFTW/bytetok)
 
-ByteTok implements Byte Pair Encoding (BPE) at the byte-level with a Rust-accelerated core for training and encoding. Text is first converted to raw bytes (0-255), then iteratively merged using learned pair statistics.
+ByteTok implements byte-level Byte Pair Encoding (BPE) with a Rust-accelerated core for training and encoding. Text is first converted to raw bytes, then merged according to learned pair statistics.
 
-The training algorithm is based on an optimized [BPE algorithm](https://aclanthology.org/2023.findings-acl.38.pdf) from the paper _A Formal Perspective on Byte-Pair Encoding_. The research has enabled ByteTok to achieve O(N log V) training time and O(N log N) encoding time versus the naive O(NV) approach.
+The training pipeline first pretokenizes the corpus, deduplicates identical pieces, and tracks their frequencies as weighted counts. Merge steps then operate over those weighted pieces instead of repeatedly rescanning the full token stream, which cuts redundant work while preserving the same merge decisions.
 
-> Here, N denotes the length of the input text and V is the tokenizer's vocabulary size.
+If this methodology seems familiar to you, that's because ByteTok's current training algorithm draws inspiration from Hugging Face's implementation!
 
 ## Features
 
@@ -40,11 +40,11 @@ Dataset: [Sci-Fi Books (Gutenberg)](https://huggingface.co/datasets/stevez80/Sci
 
 | Corpus Size | Vocab Size | Training Time | Encoding Throughput | Decoding Throughput | Compression Ratio | Size Reduction |
 | ----------- | ---------- | ------------- | ------------------- | ------------------- | ----------------- | -------------- |
-| 132.36 MB   | 10,000     | 4.58 mins     | 16.12 MB/sec        | 82.4M tokens/sec    | 1.38x             | 27.5%          |
-| 216.96 MB   | 10,000     | 8.75 mins     | 13.82 MB/sec        | 81.4M tokens/sec    | 1.60x             | 37.7%          |
-| 216.96 MB   | 25,000     | 9.74 mins     | 14.55 MB/sec        | 70.2M tokens/sec    | 1.68x             | 40.6%          |
-| 216.96 MB   | 50,000     | 10.67 mins    | 14.99 MB/sec        | 77.0M tokens/sec    | 1.75x             | 42.7%          |
-| 326.96 MB   | 50,000     | 16.19 mins    | 14.61 MB/sec        | 79.3M tokens/sec    | 1.44x             | 30.7%          |
+| 132.36 MB   | 10,000     | 38.5 secs     | 14.07 MB/sec        | 80.4M tokens/sec    | 3.32x             | 69.9%          |
+| 216.96 MB   | 25,000     | 1.17 mins     | 12.24 MB/sec        | 77.5M tokens/sec    | 3.52x             | 71.6%          |
+| 216.96 MB   | 50,000     | 1.57 mins     | 10.85 MB/sec        | 66.9M tokens/sec    | 3.68x             | 72.8%          |
+| 326.96 MB   | 50,000     | 2.39 mins     | 10.77 MB/sec        | 76.2M tokens/sec    | 3.72x             | 73.1%          |
+| 420.36 MB   | 100,000    | 4.92 mins     | 11.11 MB/sec        | 82.6M tokens/sec    | 3.84x             | 74.0%          |
 
 ## Requirements
 

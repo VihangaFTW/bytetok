@@ -61,7 +61,18 @@ class Tokenizer(ABC):
         verbose: bool = False,
         show_progress: bool = True,
     ) -> None:
-        """Train tokenizer on byte sequence to learn merges up to target vocab size."""
+        """
+        Train the tokenizer up to a target vocabulary size.
+
+        Implementations learn merges on top of the base 256 byte vocabulary and
+        update the tokenizer's merge table and derived vocabulary in place.
+
+        Args:
+            text: Training data as a single string or a list of strings.
+            vocab_size: Target vocabulary size, including the base byte tokens.
+            verbose: Whether to log each learned merge.
+            show_progress: Whether to show Rust-side progress output during training.
+        """
         ...
 
     def encode(
