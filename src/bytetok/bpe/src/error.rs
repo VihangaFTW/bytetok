@@ -111,12 +111,14 @@ impl From<SpecialTokenError> for TokenizerInitError {
 pub(crate) enum TrainerError {
     /// The regex pattern failed to compile.
     InvalidPattern(fancy_regex::Error),
+    RegexMatch(String),
 }
 
 impl fmt::Display for TrainerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidPattern(err) => write!(f, "invalid regex pattern: {err}"),
+            Self::RegexMatch(msg) => write!(f, "regex match failed: {msg}"),
         }
     }
 }

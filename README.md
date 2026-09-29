@@ -15,7 +15,7 @@ If this methodology seems familiar to you, that's because ByteTok's current trai
 ## Features
 
 - **High-performance Rust-powered training, encoding, and decoding**: Engineered from the ground up with a parallel processing pipeline for efficient handling of large-scale NLP datasets (1GB+) with the aim of enabling rapid processing for modern LLM applications.
-- **Built-in regex patterns**: Choose from a pre-tokenization regex preset that includes GPT-2, GPT-4, GPT-4o, LLaMA 3, Qwen 2 and DeepSeek.
+- **Built-in regex patterns**: Choose from a pre-tokenization regex preset that includes GPT-2, GPT-4, GPT-4o, LLaMA 3, Qwen 2, Qwen 3.5+, DeepSeek, GLM-4/5 and Kimi K2/K3.
 - **Custom regex patterns**: Supported alongside the built-in presets.
 - **Special token strategies**: Control how special tokens are handled during encoding.
 - **Serialization**: Supports versioned `.model` / `.vocab` file formats for saving tokenizer state, as well as easy loading via a `from_pretrained()` function.

@@ -2,6 +2,7 @@
 Base tokenizer interface for byte-level tokenization implementations.
 """
 
+import json
 import logging
 from abc import ABC, abstractmethod
 from importlib.metadata import PackageNotFoundError, version
@@ -181,7 +182,10 @@ class Tokenizer(ABC):
             # store split pattern if it exists
             model_re = f.readline().strip()
             if model_re.startswith("re ") and len(model_re) > 3:
-                self.pat = model_re[3:]
+                try:
+                    self.pat = json.loads(model_re[3:])
+                except json.JSONDecodeError:
+                    raise ModelLoadError(f"invalid regex pattern entry: {model_re}")
 
             # read and load special tokens
             start_marker = f.readline().strip()
@@ -212,7 +216,9 @@ class Tokenizer(ABC):
                     )
                 try:
                     # load special token data into tokenizer
-                    special_toks[sp_tok[0]] = int(sp_tok[1])
+                    special_toks[json.loads(sp_tok[0])] = int(sp_tok[1])
+                except json.JSONDecodeError:
+                    raise ModelLoadError(f"invalid special token entry: {sp_tok[0]}")
                 except ValueError:
                     raise ModelLoadError(f"token is not a number: {sp_tok[1]}")
 
@@ -348,12 +354,12 @@ class Tokenizer(ABC):
             f"saving {len(self.special_toks)} special tokens and {len(self.merges)} merge rules"
         )
 
-        with model_path.open("w", newline="\n") as f:
+        with model_path.open("w", encoding="utf-8", newline="\n") as f:
             # header: version, tokenizer type, regex pattern if exists
             f.write(f"{PREFIX} {VERSION}\n")
             f.write(f"type {self.TOKENIZER_TYPE}\n")
             if self.pat:
-                f.write(f"re {self.pat}\n")
+                f.write(f"re {json.dumps(self.pat)}\n")
             else:
                 f.write("re \n")
             # start of special tokens marker
@@ -362,7 +368,7 @@ class Tokenizer(ABC):
             f.write(f"{len(self.special_toks)}\n")
             # body 1: mapping for all special tokens
             for seq, tok in self.special_toks.items():
-                f.write(f"{seq} {tok}\n")
+                f.write(f"{json.dumps(seq)} {tok}\n")
             # end of special tokens marker
             f.write("---\n")
             # body 2: mapping for all merged tokens
@@ -414,13 +420,16 @@ class Tokenizer(ABC):
 
         :param special_toks: Dictionary mapping token strings to integer IDs.
         :raises TrainingError: If called before training.
-        :raises SpecialTokenError: If any two entries share the same ID.
+        :raises SpecialTokenError: If any token is empty or two entries share the same ID.
         :raises VocabularyError: If any ID collides with the BPE vocabulary.
         """
         if not self.merges:
             raise TrainingError(
                 f"{self.__class__.__name__} must be trained before setting special tokens"
             )
+
+        if "" in special_toks:
+            raise SpecialTokenError("special tokens must be non-empty", found_tokens={""})
 
         # IDs must be unique within the incoming dict.
         ids = list(special_toks.values())

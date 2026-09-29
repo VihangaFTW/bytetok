@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.4.0] - 2026-09-29
+
+### Added
+
+- New built-in patterns from recent open-weight models:
+  - `qwen35`: Qwen3.5, Qwen3.6 and Qwen3.8
+  - `glm4`: GLM-4 through GLM-5.3
+  - `kimi-k2`: Kimi K2 through Kimi K3
+
+### Fixed
+
+- Text not covered by the split pattern is no longer silently dropped during encoding and training. Gaps between regex matches are now encoded as their own chunks, making encode/decode lossless for any pattern.
+- `deepseek-llm` pattern failed to compile because Unicode normalization had corrupted several characters (reversed ranges, Kelvin/Ohm signs, and the `‘` punctuation range). The pattern now matches upstream exactly. Built-in patterns are written with ASCII-only escapes to prevent this from recurring.
+- Overlapping special tokens (e.g. `<|end|>` and `<|end|>\n`) were matched nondeterministically. The longest special token now always wins.
+- Special tokens and regex patterns containing leading/trailing whitespace or newlines were corrupted or failed to load after `save()`/`load()`. These entries are now stored JSON-escaped, and model files are always written as UTF-8.
+- Regex engine failures during training (e.g. extremely long whitespace runs exceeding backtracking limits) silently dropped the remainder of the corpus chunk. Training now raises `TrainingError`.
+- Empty special tokens are now rejected by `set_special_tokens()` and ignored by the Rust special-token encoder.
+
+### Changed
+
+- `.model` file format: special token sequences and the regex pattern are stored as JSON strings. Models saved with earlier versions are not loadable.
+
+
 ## [0.3.0] - 2026-03-13
 
 ### Changed

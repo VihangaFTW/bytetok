@@ -68,7 +68,8 @@ impl BPETokenizer {
     /// # Returns
     ///
     /// Complete token sequence obtained by:
-    /// 1. Splitting text using the regex pattern.
+    /// 1. Splitting text using the regex pattern. Text between matches is
+    ///    kept as its own chunk so no input is dropped.
     /// 2. Converting each chunk to UTF-8 bytes.
     /// 3. Applying BPE merges to each chunk.
     /// 4. Concatenating all chunk results.
@@ -84,17 +85,25 @@ impl BPETokenizer {
 
         // pre-allocate: on average, BPE compresses text by 30-40%
         let mut all_tokens = Vec::with_capacity(text.len() / 3);
+        let mut last_end = 0;
 
         for mat in self.pattern.find_iter(text) {
             let m = mat.map_err(|e| EncodeError::RegexMatch(e.to_string()))?;
-            let chunk = m.as_str();
 
-            if chunk.is_empty() {
+            if m.start() == m.end() {
                 continue;
             }
 
-            let encoded = self.encode_chunk(chunk);
-            all_tokens.extend_from_slice(&encoded);
+            if m.start() > last_end {
+                all_tokens.extend_from_slice(&self.encode_chunk(&text[last_end..m.start()]));
+            }
+
+            all_tokens.extend_from_slice(&self.encode_chunk(m.as_str()));
+            last_end = m.end();
+        }
+
+        if last_end < text.len() {
+            all_tokens.extend_from_slice(&self.encode_chunk(&text[last_end..]));
         }
 
         Ok(all_tokens)
@@ -236,11 +245,13 @@ impl BPETokenizer {
     pub(crate) fn encode_text_with_special(
         &self,
         text: &str,
-        allowed_special: HashMap<String, Token>,
+        mut allowed_special: HashMap<String, Token>,
     ) -> Result<Vec<Token>, EncodeError> {
         if text.is_empty() {
             return Ok(Vec::new());
         }
+
+        allowed_special.retain(|s, _| !s.is_empty());
 
         if allowed_special.is_empty() {
             return self.encode_text(text);
@@ -285,12 +296,13 @@ impl BPETokenizer {
     pub(crate) fn encode_texts_with_special(
         &self,
         texts: &[&str],
-        allowed_special: HashMap<String, Token>,
+        mut allowed_special: HashMap<String, Token>,
         show_progress: bool,
     ) -> Result<Vec<Vec<Token>>, EncodeError> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
+        allowed_special.retain(|s, _| !s.is_empty());
         if allowed_special.is_empty() {
             return self.encode_texts(texts, show_progress);
         }
@@ -478,7 +490,8 @@ impl BPETokenizer {
 
     /// Segments text into alternating normal and special-token spans.
     ///
-    /// Compiles a regex from the `allowed_special` keys, then scans `text`
+    /// Compiles a regex from the `allowed_special` keys, longest first so
+    /// overlapping tokens resolve deterministically, then scans `text`
     /// for literal matches. Each matched special token is emitted with its
     /// token ID; non-matching spans are emitted as normal segments.
     ///
@@ -504,8 +517,11 @@ impl BPETokenizer {
     ) -> Result<Vec<(String, Option<Token>)>, EncodeError> {
         // escape regex metachars in special tokens to avoid
         // undesired pattern match behavior.
-        let pattern = allowed_special
-            .keys()
+        let mut specials: Vec<&String> = allowed_special.keys().collect();
+        specials.sort_unstable_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+
+        let pattern = specials
+            .into_iter()
             .map(|s| fancy_regex::escape(s))
             .collect::<Vec<_>>()
             .join("|");
@@ -589,7 +605,7 @@ mod tests {
         let tok = make_tokenizer(vec![], r"\S+");
         let result = tok.encode_text("ab cd").expect("text should be encodable");
         // No merges → raw UTF-8 bytes
-        assert_eq!(result, vec![97, 98, 99, 100]);
+        assert_eq!(result, vec![97, 98, 32, 99, 100]);
     }
 
     #[test]
@@ -598,7 +614,7 @@ mod tests {
         let tok = make_tokenizer(vec![((97, 98), 256)], r"\S+");
         let result = tok.encode_text("ab cd").expect("text should be encodable");
         // "ab" → [256], "cd" → [99, 100]
-        assert_eq!(result, vec![256, 99, 100]);
+        assert_eq!(result, vec![256, 32, 99, 100]);
     }
 
     #[test]
@@ -659,6 +675,45 @@ mod tests {
     }
 
     #[test]
+    fn test_encode_text_keeps_unmatched_text() {
+        let tok = make_tokenizer(vec![((97, 98), 256)], r"[a-z]+");
+        let result = tok
+            .encode_text("ab = ab!")
+            .expect("text should be encodable");
+        assert_eq!(result, vec![256, 32, 61, 32, 256, 33]);
+    }
+
+    #[test]
+    fn test_encode_text_with_special_prefers_longest_match() {
+        let tok = make_tokenizer(vec![], r"\S+|\s+");
+        let allowed = HashMap::from([
+            (String::from("<a>"), 1000),
+            (String::from("<a><b>"), 1001),
+            (String::from("<a><b>\n"), 1002),
+        ]);
+        for _ in 0..50 {
+            let result = tok
+                .encode_text_with_special("<a><b>x<a><b>\n<a>", allowed.clone())
+                .expect("text should be encodable");
+            assert_eq!(result, vec![1001, 120, 1002, 1000]);
+        }
+    }
+
+    #[test]
+    fn test_encode_text_with_special_ignores_empty_token() {
+        let tok = make_tokenizer(vec![((97, 98), 256)], r"\S+");
+        let allowed = HashMap::from([(String::new(), 1000)]);
+        let result = tok
+            .encode_text_with_special("ab", allowed.clone())
+            .expect("text should be encodable");
+        assert_eq!(result, vec![256]);
+        let batch = tok
+            .encode_texts_with_special(&["ab"], allowed, false)
+            .expect("texts should be encodable");
+        assert_eq!(batch, vec![vec![256]]);
+    }
+
+    #[test]
     fn test_encode_bytes_batch_parallel() {
         let tok = make_tokenizer(vec![((97, 98), 256)], r"\S+");
         let texts = &["ab", "cd"];
@@ -709,7 +764,7 @@ mod tests {
         let decoded = tok
             .decode_tokens(&encoded, ErrorMode::Strict)
             .expect("tokens should be decodable to a string");
-        assert_eq!(decoded, "abcdef"); // Note: spaces are removed by \S+ pattern
+        assert_eq!(decoded, original);
     }
 
     #[test]

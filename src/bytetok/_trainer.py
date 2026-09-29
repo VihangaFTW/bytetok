@@ -109,8 +109,8 @@ def _train_bpe_from_corpus(
     if len(corpus) == 0:
         raise TrainingError("empty corpus, no training performed")
 
-    trainer = RustBPETrainer.from_corpus(corpus, pattern, min_count=1)
     try:
+        trainer = RustBPETrainer.from_corpus(corpus, pattern, min_count=1)
         trainer.train(n_merges, show_progress=show_progress)
     except ValueError as e:
         raise TrainingError(f"internal error: {e}") from e

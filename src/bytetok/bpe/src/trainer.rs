@@ -496,7 +496,8 @@ impl BPETrainer {
     ///
     /// # Errors
     ///
-    /// Returns [`TrainerError`] if `pattern` is provided but fails to compile.
+    /// Returns [`TrainerError`] if `pattern` is provided but fails to compile,
+    /// or if the regex engine fails while scanning the corpus.
     fn pretokenize(corpus: &str, pattern: Option<&str>) -> Result<Vec<Piece>, TrainerError> {
         if corpus.is_empty() {
             return Ok(Vec::new());
@@ -513,7 +514,7 @@ impl BPETrainer {
 
                 chunks
                     .into_par_iter()
-                    .fold(
+                    .try_fold(
                         || {
                             (
                                 fancy_regex::Regex::new(pat).expect("pattern was validated"),
@@ -526,12 +527,12 @@ impl BPETrainer {
                             )
                         },
                         |(re, mut map), line| {
-                            Self::pretok_count_matches(&re, line, &mut map);
-                            (re, map)
+                            Self::pretok_count_matches(&re, line, &mut map)?;
+                            Ok::<_, TrainerError>((re, map))
                         },
                     )
-                    .map(|(_, map)| map)
-                    .reduce(
+                    .map(|res| res.map(|(_, map)| map))
+                    .try_reduce(
                         || {
                             FxHashMap::with_capacity_and_hasher(
                                 LOCAL_MAP_CAPACITY,
@@ -542,9 +543,9 @@ impl BPETrainer {
                             for (chunk, count) in l_map {
                                 *a_map.entry(chunk).or_insert(0) += count;
                             }
-                            a_map
+                            Ok(a_map)
                         },
-                    )
+                    )?
             }
             // no pattern provided; split each line by whitespace
             _ => chunks
@@ -575,35 +576,59 @@ impl BPETrainer {
     /// Counts regex matches from one text chunk into a local frequency map.
     ///
     /// Empty matches are skipped by advancing one Unicode scalar value to avoid
-    /// infinite loops without breaking UTF-8 boundaries.
+    /// infinite loops without breaking UTF-8 boundaries. Text between matches
+    /// is counted as its own piece so no input is dropped.
     ///
     /// # Arguments
     ///
     /// - `re` - The compiled regex used for matching.
     /// - `text` - The chunk of text to scan.
     /// - `map` - The local map that accumulates byte-slice counts.
-    fn pretok_count_matches<'a>(re: &Regex, text: &'a str, map: &mut FxHashMap<&'a [u8], Count>) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TrainerError::RegexMatch`] if the regex engine fails while
+    /// scanning, e.g. when its backtracking limits are exceeded.
+    fn pretok_count_matches<'a>(
+        re: &Regex,
+        text: &'a str,
+        map: &mut FxHashMap<&'a [u8], Count>,
+    ) -> Result<(), TrainerError> {
         // fancy regex returns result for matches
         // manual loop required
         let mut start = 0;
+        let mut last_end = 0;
 
         while start <= text.len() {
-            match re.find_from_pos(text, start) {
-                Ok(Some(m)) => {
-                    if m.start() == m.end() {
-                        start = match text[m.end()..].chars().next() {
-                            Some(ch) => m.end() + ch.len_utf8(),
-                            None => break,
-                        };
-                        continue;
-                    }
-                    *map.entry(m.as_str().as_bytes()).or_insert(0) += 1;
-                    start = m.end();
-                }
-                Ok(None) => break,
-                Err(_) => break,
+            let m = match re
+                .find_from_pos(text, start)
+                .map_err(|e| TrainerError::RegexMatch(e.to_string()))?
+            {
+                Some(m) => m,
+                None => break,
+            };
+
+            if m.start() == m.end() {
+                start = match text[m.end()..].chars().next() {
+                    Some(ch) => m.end() + ch.len_utf8(),
+                    None => break,
+                };
+                continue;
             }
+
+            if m.start() > last_end {
+                *map.entry(text[last_end..m.start()].as_bytes()).or_insert(0) += 1;
+            }
+            *map.entry(m.as_str().as_bytes()).or_insert(0) += 1;
+            start = m.end();
+            last_end = m.end();
         }
+
+        if last_end < text.len() {
+            *map.entry(text[last_end..].as_bytes()).or_insert(0) += 1;
+        }
+
+        Ok(())
     }
 
     /// Splits the corpus into newline-aligned chunks for parallel processing.
@@ -786,7 +811,7 @@ mod tests {
         let pieces = BPETrainer::pretokenize("hello world hello", Some(r"\w+"))
             .expect("regex pretokenization should succeed");
 
-        assert_eq!(pieces.len(), 2);
+        assert_eq!(pieces.len(), 3);
     }
 
     #[test]
@@ -901,7 +926,25 @@ mod tests {
         let pieces = BPETrainer::pretokenize("éa", Some(r"(?=é)|."))
             .expect("regex pretokenization should succeed");
 
-        assert_eq!(pieces.len(), 1);
-        assert_eq!(pieces[0].tokens, vec![97]);
+        assert_eq!(pieces.len(), 2);
+        assert!(pieces.iter().any(|piece| piece.tokens == vec![0xC3, 0xA9]));
+        assert!(pieces.iter().any(|piece| piece.tokens == vec![97]));
+    }
+
+    #[test]
+    fn test_pretokenize_counts_unmatched_text() {
+        let pieces = BPETrainer::pretokenize("a==b==c", Some(r"[a-z]"))
+            .expect("regex pretokenization should succeed");
+
+        let gap = pieces.iter().find(|piece| piece.tokens == vec![61, 61]);
+        assert_eq!(gap.map(|piece| piece.count), Some(2));
+    }
+
+    #[test]
+    fn test_pretokenize_reports_regex_failure() {
+        let corpus = format!("{}x", " ".repeat(3_000_000));
+        let result = BPETrainer::pretokenize(&corpus, Some(r"\s+(?!\S)|\s+|\S+"));
+
+        assert!(matches!(result, Err(TrainerError::RegexMatch(_))));
     }
 }
