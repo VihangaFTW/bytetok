@@ -6,19 +6,25 @@
 ![Python versions](https://img.shields.io/pypi/pyversions/bytetok?cacheSeconds=300)
 ![License](https://img.shields.io/github/license/VihangaFTW/bytetok)
 
+ByteTok is a minimal text tokenizer written in Rust, conveniently wrapped as a Python package. It is suitable for developers who are experimenting with LLM architectures and wish for a tokenizer that can be easily trained.
+
+## Features
+
+- **Fully end to end train -> encode -> decode pipeline**: via a parallel processing implementation that handles big datasets (2GB+).
+- **Built-in regex patterns**: Choose from a pre-tokenization regex preset that includes GPT-2, GPT-4, GPT-4o, LLaMA 3, Qwen 2, Qwen 3.5+, DeepSeek, GLM-4/5 and Kimi K2/K3.
+- **Custom regex patterns**: Supported alongside the built-in presets.
+- **Special token strategies**: Control how special tokens are handled during encoding.
+- **Serialization**: Supports versioned `.model` / `.vocab` file formats for saving tokenizer state, as well as easy loading via a `from_pretrained()` function.
+
+
+## How it works
+
 ByteTok implements byte-level Byte Pair Encoding (BPE) with a Rust-accelerated core for training and encoding. Text is first converted to raw bytes, then merged according to learned pair statistics.
 
 The training pipeline first pretokenizes the corpus, deduplicates identical pieces, and tracks their frequencies as weighted counts. Merge steps then operate over those weighted pieces instead of repeatedly rescanning the full token stream, which cuts redundant work while preserving the same merge decisions.
 
 If this methodology seems familiar to you, that's because ByteTok's current training algorithm draws inspiration from Hugging Face's implementation!
 
-## Features
-
-- **High-performance Rust-powered training, encoding, and decoding**: Engineered from the ground up with a parallel processing pipeline for efficient handling of large-scale NLP datasets (1GB+) with the aim of enabling rapid processing for modern LLM applications.
-- **Built-in regex patterns**: Choose from a pre-tokenization regex preset that includes GPT-2, GPT-4, GPT-4o, LLaMA 3, Qwen 2, Qwen 3.5+, DeepSeek, GLM-4/5 and Kimi K2/K3.
-- **Custom regex patterns**: Supported alongside the built-in presets.
-- **Special token strategies**: Control how special tokens are handled during encoding.
-- **Serialization**: Supports versioned `.model` / `.vocab` file formats for saving tokenizer state, as well as easy loading via a `from_pretrained()` function.
 
 ## History
 
@@ -32,6 +38,8 @@ This project started as a weekend experiment with BPE for text compression. I la
 Feel free to check out robust libraries such as OpenAI's [tiktoken](https://github.com/openai/tiktoken) and Google's [sentencepiece](https://github.com/google/sentencepiece) that are widely adopted in production environments. Tiktoken resembles ByteTok the most, but it should be noted that ByteTok provides a training pipeline which Tiktoken lacks.
 
 In contrast, ByteTok was developed with a different focus. It prioritizes simplicity and usability by offering a clear API that efficiently maps strings to lists of token IDs. All this without burdening users with overly complex configuration or excessive parameters.
+
+As of writing, I consider this project completed as it meets all my requirements. New releases will be mostly bug fixes.
 
 ## Benchmarks
 
